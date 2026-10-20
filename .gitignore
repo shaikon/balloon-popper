@@ -1,0 +1,9 @@
+__pycache__/
+*.pyc
+
+# Export destination the app creates beside main.py at launch; holds the
+# operator's copied flight logs / suggested-constants files, never source.
+Downloaded Files/
+
+# Per-launch console log the app writes to the working directory.
+balloon_chaser_console_*.log
