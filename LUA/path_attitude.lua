@@ -62,13 +62,11 @@
 -- no limit: there the axis is near level and the bank has no meaning.
 -- The roll's aim is held to both: the roll goes no further than the first
 -- bank where the wing tip would pass the band or the aircraft would be upside
--- down, so a turn that wants more bank aims at that bank itself, and where
--- that stops a pull from facing f the turn is slowed (THE TURN THE ROOM
--- ALLOWS).  One more term works with the limit: the turn's sideways part
--- weighs att_k_side times its share, so the heading turns while the path is
--- still shallow and a bank still turns it.  It does not act within
--- CURVE_POLE_FADE_DEG of vertical, where the horizontal across the path has
--- no direction.  The law steers by these two rules of a chase; the others
+-- down, so a turn that wants more bank aims at that bank itself.  One more
+-- term works with the limit: the turn's sideways part weighs att_k_side times
+-- its share, so the heading turns while the path is still shallow and a bank
+-- still turns it.  It does not act within CURVE_POLE_FADE_DEG of vertical,
+-- where the horizontal across the path has no direction.  The law steers by these two rules of a chase; the others
 -- judge the flown curve afterwards, and the law does not sort chases by them.
 --
 -- PLAN MODE.  While the Curve Flyer runs a PLAN (curve_flyer.lua) it hands
@@ -76,11 +74,10 @@
 -- round the path as the law measures it.  The guidance and the pitch are the
 -- law's own; the roll goes to the PLAN's bank instead of facing the force
 -- line, held to the band and upside down as any aim point is, so no lift side
--- is chosen and the turn is not slowed; the turn's sideways part is not
--- weighed, since that weighting serves the law's own choice of bank; the
--- roll cancels the bank's drift on every tick, and
--- fades to nothing within CURVE_POLE_FADE_DEG of vertical, where the bank
--- cannot be measured.  The Curve Planner flies a model of this mode
+-- is chosen; the turn's sideways part is not weighed, since that weighting
+-- serves the law's own choice of bank; the roll cancels the bank's drift on
+-- every tick, and fades to nothing within CURVE_POLE_FADE_DEG of vertical,
+-- where the bank cannot be measured.  The Curve Planner flies a model of this mode
 -- (curve_planner.py), so a change here is a change there in the same commit.
 --
 -- The law allocates nothing per tick: its state and diagnostics live in the
@@ -92,7 +89,7 @@ local M = {}
 
 local NAN = 0 / 0
 local abs, sqrt, atan = math.abs, math.sqrt, math.atan
-local sin, cos, asin, acos = math.sin, math.cos, math.asin, math.acos
+local sin, asin, acos = math.sin, math.asin, math.acos
 local rad, deg = math.rad, math.deg
 local min, max = math.min, math.max
 
@@ -128,8 +125,8 @@ function M.new()
     w_V = 0.0, w_um = 0.0, w_up_x = 0.0, w_upy = 0.0, w_upz = 0.0, w_bank = 0.0,
     w_pz = 0.0, w_zz = 0.0,
     w_gy = 0.0, w_gz = 0.0, w_theta = 0.0, w_ty = 0.0, w_tz = 0.0,
-    w_horiz = false, w_uy = 0.0, w_uz = 0.0, w_om = 0.0, w_om_ask = 0.0,
-    w_fy = 0.0, w_fz = 0.0, w_slowed = false,
+    w_horiz = false, w_uy = 0.0, w_uz = 0.0, w_om = 0.0,
+    w_fy = 0.0, w_fz = 0.0,
     w_mu = 0.0, w_clamped = false, w_wf = 0.0, w_plan = false,
     w_proxy = 0.0, w_tip_c = 0.0, w_tip_k = 0.0, w_tip_d = 0.0,
     w_room_lo = 0.0, w_room_hi = 0.0,
@@ -143,7 +140,6 @@ function M.clear_log(st)
   st.ran = false
   st.log_theta_deg, st.log_theta_now_deg = NAN, NAN
   st.log_u_y, st.log_u_z, st.log_omega_dps = NAN, NAN, NAN
-  st.log_omega_ask_dps = NAN
   st.log_f_y, st.log_f_z = NAN, NAN
   st.log_mu_deg, st.log_side, st.log_w_f = NAN, NAN, NAN
   st.log_wx_dps, st.log_wy_dps, st.log_wz_dps = NAN, NAN, NAN
@@ -365,59 +361,20 @@ local function turn(st, g, weigh)
   local uy, uz = 0.0, -1.0
   if dn > DIR_MIN then uy, uz = dy / dn, dz / dn end
   local om = min((g.att_k_path or 0.0) * st.w_theta, rad(g.att_path_rate_max_dps or 0.0))
-  st.w_uy, st.w_uz, st.w_om, st.w_om_ask = uy, uz, om, om
+  st.w_uy, st.w_uz, st.w_om = uy, uz, om
   -- THE FORCE LINE
   st.w_fy = V * om * uy - st.w_gy
   st.w_fz = V * om * uz - st.w_gz
 end
 
---- THE TURN THE ROOM ALLOWS.  Where the room stops a pull from facing f, the
---- path is asked to turn toward the same u at the fastest rate a pull inside
---- the room makes, and f becomes that turn's.  Turning at a (m/s^2 across
---- the path) asks f = a * u - g_perp, which is a * u_h along h, the horizontal
---- across the path, and G + a * u_v along up across it (G gravity across the
---- path).  A pull makes it with the canopy leaning toward u's side by no more
---- than B, the farthest bank the room reaches there, while
---- G + a * u_v >= cot(B) * a * |u_h|: up to
----     a = G / (cot(B) * |u_h| - u_v),
---- and at every rate where the denominator is not positive.  The wing then
---- makes all of f, along the turn.  Pulling at the room's end with f as asked
---- would leave the rest of f undone across the turn, and that bends the path
---- off it so that f moves further out of the room.  A push is not slowed: no
---- push turns the path toward u slower than gravity alone does, and a push
---- the room stops from facing f is a pull instead (THE LIFT SIDE).  Within
---- CURVE_POLE_FADE_DEG of vertical up across the path has no direction, and
---- the turn is not slowed.
-local function slow_to_room(st)
-  st.w_slowed = false
-  local um = st.w_um
-  if st.side < 0 or um <= POLE_SIN then return end
-  local vy, vz = st.w_upy / um, st.w_upz / um
-  local uy, uz = st.w_uy, st.w_uz
-  local uh, uv = uz * vy - uy * vz, uy * vy + uz * vz
-  local b = (uh >= 0.0) and st.w_bank + st.w_room_hi or -(st.w_bank + st.w_room_lo)
-  if b >= 180.0 then return end
-  local a = 0.0
-  if b > 0.0 then
-    local den = cos(rad(b)) / sin(rad(b)) * abs(uh) - uv
-    if den <= 0.0 then return end
-    a = C.GRAVITY_MPS2 * um / den
-  end
-  local V = st.w_V
-  if a >= V * st.w_om then return end
-  st.w_om, st.w_slowed = a / V, true
-  st.w_fy, st.w_fz = a * uy - st.w_gy, a * uz - st.w_gz
-end
-
 --- 2b. THE LIFT SIDE, and the roll still to go for its end of the lift line
 --- to face the force line.  The wing pushes along its lift line either way,
 --- so the side is the one of the wing line f lies on: the canopy's pulls, the
---- belly's pushes.  A push the room stops from facing f is a pull instead:
---- the room never stops a pull, which it slows until it can face f (THE TURN
---- THE ROOM ALLOWS), while a cut push turns the path off the turn.  The side
---- changes only where f crosses the wing line, or where the belly's facing
---- roll enters or leaves the room as f moves, and the law's own roll brings
---- neither about: rolling the lift line toward f turns the wing line away
+--- belly's pushes.  A push the room stops from facing f is a pull instead,
+--- held to the room like any aim: a cut push turns the path off the turn.
+--- The side changes only where f crosses the wing line, or where the belly's
+--- facing roll enters or leaves the room as f moves, and the law's own roll
+--- brings neither about: rolling the lift line toward f turns the wing line away
 --- from it, and which banks the room allows is set by the path, not by the
 --- roll.  Choosing instead the side whose push fits f better once the room
 --- cuts each side's roll makes a tie the law steers itself onto: between the
@@ -433,10 +390,7 @@ local function force_and_side(st)
     if m < st.w_room_lo or m > st.w_room_hi then sd = 1 end
   end
   st.side = sd
-  slow_to_room(st)
   st.w_mu, st.w_clamped = held(atan(sd * st.w_fy, -sd * st.w_fz), st)
-  -- a slowed turn's f lies at the room's end, where the bank is held
-  st.w_clamped = st.w_clamped or st.w_slowed
   -- the roll has a weight only under a PLAN
   st.w_wf = NAN
 end
@@ -548,7 +502,6 @@ function M.step(st, s, cfg, g, bx, by, bz, dt, plan_bank)
   st.n_lift = -st.w_fz / C.GRAVITY_MPS2
   st.log_theta_deg = deg(st.w_theta)
   st.log_u_y, st.log_u_z, st.log_omega_dps = st.w_uy, st.w_uz, deg(st.w_om)
-  st.log_omega_ask_dps = deg(st.w_om_ask)
   st.log_f_y, st.log_f_z = st.w_fy, st.w_fz
   st.log_mu_deg, st.log_w_f = deg(st.w_mu), st.w_wf
   -- under a PLAN no lift side is chosen

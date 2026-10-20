@@ -365,7 +365,7 @@ STATE2's columns, in the units the FC holds:
 |---|---|
 | pairing | `lua_state2_seq` - equal to `lua_seq` when the row's two frames are from the same tick |
 | the FC's sensors, this tick | `lua_fc_mode`; `lua_q_w/x/y/z` (world->body); `lua_gyro_x/y/z_rads`; `lua_vel_n/e/d_mps`; `lua_eas_mps`; `lua_eas2tas` (true airspeed per EAS, sqrt(sea-level / local density); the pitch trim's density ratio is its inverse square) |
-| law internals | `lua_balloon_body_x/y/z` (the balloon direction, body frame: what the law flew toward unless a PLAN aimed it at a line); `los_elev_deg`; the bank-rate split; `sideslip_deg`, `aoa_deg`; `lua_yaw_point_i_dps`; `lua_coord_valid`, `lua_accel_valid`, `lua_lat_marker_valid`; roll-to-plane's `lua_plane_path_share`, `lua_plane_path_deg`, `lua_plane_path_from_vel`, `lua_plane_err_deg`, `lua_plane_side`, `lua_plane_i_dps`, `lua_plane_i_frozen`, `lua_plane_err_rate_dps`, `lua_plane_d_dps`, `lua_plane_drift_dps`, `lua_plane_ff_dps`, and the unflown `lua_plane_off_nose_deg`, `lua_plane_axis_up` (§ "The roll axis"); the path's own turn, `lua_path_turn_up_dps`, `lua_path_turn_right_dps`; Lift Vector Pointing's `lua_att_theta_deg`, `lua_att_u_y`, `lua_att_u_z`, `lua_att_omega_dps`, `lua_att_f_y_mps2`, `lua_att_f_z_mps2`, `lua_att_mu_deg`, `lua_att_side`, `lua_att_omega_ask_dps` (§ "Lift Vector Pointing: the second steering law") |
+| law internals | `lua_balloon_body_x/y/z` (the balloon direction, body frame: what the law flew toward unless a PLAN aimed it at a line); `los_elev_deg`; the bank-rate split; `sideslip_deg`, `aoa_deg`; `lua_yaw_point_i_dps`; `lua_coord_valid`, `lua_accel_valid`, `lua_lat_marker_valid`; roll-to-plane's `lua_plane_path_share`, `lua_plane_path_deg`, `lua_plane_path_from_vel`, `lua_plane_err_deg`, `lua_plane_side`, `lua_plane_i_dps`, `lua_plane_i_frozen`, `lua_plane_err_rate_dps`, `lua_plane_d_dps`, `lua_plane_drift_dps`, `lua_plane_ff_dps`, and the unflown `lua_plane_off_nose_deg`, `lua_plane_axis_up` (§ "The roll axis"); the path's own turn, `lua_path_turn_up_dps`, `lua_path_turn_right_dps`; Lift Vector Pointing's `lua_att_theta_deg`, `lua_att_u_y`, `lua_att_u_z`, `lua_att_omega_dps`, `lua_att_f_y_mps2`, `lua_att_f_z_mps2`, `lua_att_mu_deg`, `lua_att_side` (§ "Lift Vector Pointing: the second steering law") |
 | the surfaces | `lua_out_aileron/elevator/rudder` (what ArduPlane asked of each, before the V-tail mix, +-4500 = full travel); `lua_out_throttle` (percent); `lua_pwm_aileron`, `lua_pwm_vtail_l/r` (the servo signal after the mix; 0 = no channel carries it) |
 | the Curve Flyer | `lua_cf_state` (0 off, 1 waiting for the PLAN, 2 flying the turn, 3 turn complete, 4 no PLAN in time, 6 the turn's line held, 7 a run-in holding its line, 8 the dive after it: `CF_STATE_*`; 5 is unused); `lua_cf_plan_id` (the PLAN taken this chase, 0 for none); `lua_cf_progress` (0-1 through the turn or the dive; 1 while a line is held); `lua_cf_eps_deg` (the path's angle off the law's target: the balloon, or the line it holds or turns onto); `lua_cf_bank_ref_deg` (the bank the law was handed, in its own measure: the schedule's, or the bank toward the target); `lua_cf_hold_n/e/d` (the line, world unit vector: a hold's, or a run-in's) (§ "The Curve Planner and the Curve Flyer") |
 
@@ -2553,9 +2553,8 @@ the canopy: up and over.
 The wing pushes along its lift line either way, so the side is the one of the
 wing line f lies on: f on the canopy's side is a pull, f on the belly's side a
 push. A push the room (below: the band and upside down) stops from facing f is
-a pull instead. The room never stops a pull: where it would, the turn is slowed
-until the pull can face f (§ "The turn the room allows"), while a push it cut
-short would turn the path off the turn.
+a pull instead, held to the room like any aim: a push it cut short would turn
+the path off the turn.
 
 The side changes only where f crosses the wing line, or where the belly's
 facing roll enters or leaves the room as f moves, and the law's own roll brings
@@ -2599,8 +2598,8 @@ leave it, by its nearer end. The law aims at the limit, not inside it: the roll
 can carry a few degrees past before it settles, and an operator who wants less
 lowers Bank Lim.
 
-While the room holds the bank - the roll still to go cut to it, or a slowed turn
-whose f lies at the room's end - the roll also cancels the bank's drift. The
+While the room holds the bank - the roll still to go cut to it - the roll also
+cancels the bank's drift. The
 bank round the path moves as the path turns, with no roll about it at all:
 
     d(bank)/dt = wx - up_x * (up_y * wy + up_z * wz) / um^2
@@ -2634,29 +2633,6 @@ has no meaning.
 
 The rules of a chase grade by this item, and the law also steers by it, in
 every chase, with or without a PLAN. `upside_room()` makes the cut.
-
-### The turn the room allows
-
-Where the room stops a pull from facing f, the path is asked to turn toward the
-same u at the fastest rate a pull inside the room makes, and f becomes that
-turn's (`slow_to_room()`). Turning at a (m/s^2 across the path) asks
-f = a u - g_perp: a u_h along h, the horizontal across the path, and G + a u_v
-along up across it, G being gravity across the path. A pull makes that with the
-canopy leaning toward u's side by no more than B, the farthest bank the room
-reaches there, while G + a u_v >= cot(B) a |u_h|, which holds up to
-
-    a = G / (cot(B) |u_h| - u_v)
-
-and at every rate where the denominator is not positive. The wing then makes all
-of f, along the turn. Pulling at the room's end with f as asked would leave the
-rest of f undone across the turn, and that bends the path off the turn so that
-f moves further out of the room.
-
-A push is not slowed: no push turns the path toward u slower than gravity alone
-does, and a push the room stops is a pull instead (§ "The lift side"). Within
-`CURVE_POLE_FADE_DEG` of vertical up across the path has no direction, and the
-turn is not slowed. `lua_att_omega_ask_dps` logs the rate the guidance asked
-for, `lua_att_omega_dps` the rate flown.
 
 ### The sideways weighting
 
@@ -2713,8 +2689,8 @@ toward and the bank to hold, measured round the path as this law measures it
 (§ "The Curve Planner and the Curve Flyer"). The guidance and the pitch are the
 law's own. The roll goes to the PLAN's bank instead of facing the force line,
 held to the band and to upside down as any target is, so no lift side is chosen
-(`lua_att_side` blank) and the turn is not slowed. The sideways weighting is
-off, since it serves the law's own choice of bank. The roll cancels the bank's drift on every tick, and the roll, with the
+(`lua_att_side` blank). The sideways weighting is off, since it serves the
+law's own choice of bank. The roll cancels the bank's drift on every tick, and the roll, with the
 roll integrator's input, fades over the last `CURVE_POLE_FADE_DEG` before
 vertical to nothing there, where the bank cannot be measured.
 
@@ -2728,8 +2704,7 @@ internal is NaN, and so blank, on a tick the law did not run.
 |---|---|
 | `lua_att_theta_deg`, `lua_att_theta_now_deg` | the path's angle off the target: from the led path, and as read |
 | `lua_att_u_y`, `lua_att_u_z` | u, the turn's direction across the path |
-| `lua_att_omega_dps` | Omega, the turn rate asked of the path: the guidance's, slowed where the room stops a pull from making it |
-| `lua_att_omega_ask_dps` | the turn rate the guidance asks for, before the room slows it |
+| `lua_att_omega_dps` | Omega, the turn rate asked of the path |
 | `lua_att_f_y_mps2`, `lua_att_f_z_mps2` | the force line f |
 | `lua_att_mu_deg` | the roll still to go for the lift side's end of the lift line to face f, held to the room; under a PLAN, to the PLAN's bank |
 | `lua_att_side` | the lift side: 1 canopy, -1 belly; blank under a PLAN |
@@ -2886,7 +2861,7 @@ they fly without a PLAN:
   yaw coordination stays, so the roll turns about the path.
 - **Lift Vector Pointing.** § "Lift Vector Pointing" → "Its plan mode": the
   guidance and pitch its own, the roll to the PLAN's bank round the path held
-  to the band and to upside down, no lift side, no slowed turn and no sideways
+  to the band and to upside down, no lift side and no sideways
   weighting, the bank's drift cancelled every tick, and the roll faded near
   vertical.
 

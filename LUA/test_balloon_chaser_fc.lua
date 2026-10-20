@@ -2415,10 +2415,9 @@ print("\n17. LIFT VECTOR POINTING: SELECTED, LOGGED, LIMITED AND CLEARED")
 -- the bank limit in every chase, and aims at the limit itself when the turn
 -- wants more; it never rolls the aircraft upside down; its lift side is the
 -- side of the wing line the force line lies on, a push the room stops from
--- facing it a pull instead, and a pull the room stops is slowed toward the
--- same direction; its command is its own rate, cut only at the ACRO rates; its
--- integrators run only near the balloon and are cleared on every tick their
--- output does not reach the aircraft; and it allocates nothing per tick.
+-- facing it a pull instead; its command is its own rate, cut only at the ACRO
+-- rates; its integrators run only near the balloon and are cleared on every
+-- tick their output does not reach the aircraft; and it allocates nothing per tick.
 ;(function()
   local C3 = require("constants")
   local PA = require("path_attitude")
@@ -2582,20 +2581,6 @@ print("\n17. LIFT VECTOR POINTING: SELECTED, LOGGED, LIMITED AND CLEARED")
         .. "point is not rolled through to the far side",
         held_st.att_room_lo_deg == -lim and held_st.att_room_hi_deg == lim,
         string.format("room %.3f .. %.3f", held_st.att_room_lo_deg, held_st.att_room_hi_deg))
-  -- THE TURN THE ROOM ALLOWS: that turn is slowed, toward the same direction,
-  -- to the fastest a pull at the limit makes.  Level and square to the right,
-  -- f = a * u - g_perp leans by the limit where a = g * tan(limit).
-  local a_lim = C3.GRAVITY_MPS2 * math.tan(rad(lim))
-  check("a turn the room cannot make by pulling is slowed toward the same direction, to what "
-        .. "a pull at the limit makes: f leans by the limit, all of it made",
-        held_s2.att_omega_dps < held_s2.att_omega_ask_dps
-        and math.abs(held_s2.att_omega_ask_dps - C3.ATT_PATH_RATE_MAX_DPS) < 1e-3
-        and math.abs(rad(held_s2.att_omega_dps) * sim.vn - a_lim) < 1e-3
-        and math.abs(held_s2.att_f_y_mps2 - a_lim) < 1e-3
-        and math.abs(held_s2.att_f_z_mps2 + C3.GRAVITY_MPS2) < 1e-3,
-        string.format("asked %.3f, flown %.3f deg/s, f (%.4f, %.4f), expected (%.4f, %.4f)",
-                      held_s2.att_omega_ask_dps, held_s2.att_omega_dps, held_s2.att_f_y_mps2,
-                      held_s2.att_f_z_mps2, a_lim, -C3.GRAVITY_MPS2))
 
   -- THE LIFT SIDE is the side of the wing line f lies on.  With the guidance at
   -- its cap and the balloon square to the right, f lies on the wing line where
@@ -2618,33 +2603,30 @@ print("\n17. LIFT VECTOR POINTING: SELECTED, LOGGED, LIMITED AND CLEARED")
                       tostring(s2above.att_side), s2above.att_f_z_mps2, tostring(s2down.att_side),
                       s2down.att_f_z_mps2, s2down.att_mu_deg))
   -- f on the belly's side where the room stops the belly from facing it: a
-  -- pull instead, slowed to the turn the room allows.
+  -- pull instead, held at the limit.
   stand_down()
   local _, s2below = aim(-(on_line + 5.0), 90)
   check(string.format("wings level, f on the belly's side but past the roll the room allows: "
-                      .. "the law pulls instead, slowed to the turn the limit allows (the balloon "
-                      .. "square to the right %.1f below)", on_line + 5.0),
-        s2below.att_side == 1 and math.abs(s2below.att_mu_deg - lim) < 1e-3
-        and s2below.att_omega_dps < s2below.att_omega_ask_dps,
-        string.format("side %s, roll to go %.4f (limit %g), asked %.2f flown %.2f deg/s",
-                      tostring(s2below.att_side), s2below.att_mu_deg, lim,
-                      s2below.att_omega_ask_dps, s2below.att_omega_dps))
+                      .. "the law pulls instead, held at the limit (the balloon square to the "
+                      .. "right %.1f below)", on_line + 5.0),
+        s2below.att_side == 1 and math.abs(s2below.att_mu_deg - lim) < 1e-3,
+        string.format("side %s, roll to go %.4f (limit %g)",
+                      tostring(s2below.att_side), s2below.att_mu_deg, lim))
   -- Banked to the limit with f below the horizon but on the canopy's side of
-  -- the wing line, the law pulls, slowed to the turn the limit allows, which
-  -- lays f along the canopy.  The push the room allows fits f better there;
-  -- choosing the better fit is the tie the law would steer itself onto.
+  -- the wing line, the law pulls, and the roll is held at the limit.  The push
+  -- the room allows fits f better there; choosing the better fit is the tie
+  -- the law would steer itself onto.
   sim.roll = rad(lim)
   stand_down()
   local _, s2bank = aim(-(on_line + 10.0), 90)
   sim.roll = 0.0
   check("banked to the limit, f below the horizon but on the canopy's side of the wing line: "
-        .. "the law pulls, slowed so that f lies along the canopy",
+        .. "the law pulls, the roll held at the limit",
         s2bank.att_side == 1 and math.abs(s2bank.att_mu_deg) < 1e-3
-        and math.abs(s2bank.att_f_y_mps2) < 1e-3 and s2bank.att_f_z_mps2 < 0.0
-        and s2bank.att_omega_dps < s2bank.att_omega_ask_dps,
-        string.format("side %s, roll to go %.4f, f (%.4f, %.4f), asked %.2f flown %.2f deg/s",
+        and s2bank.att_f_z_mps2 < 0.0,
+        string.format("side %s, roll to go %.4f, f (%.4f, %.4f)",
                       tostring(s2bank.att_side), s2bank.att_mu_deg, s2bank.att_f_y_mps2,
-                      s2bank.att_f_z_mps2, s2bank.att_omega_ask_dps, s2bank.att_omega_dps))
+                      s2bank.att_f_z_mps2))
 
   -- UPSIDE DOWN, as the rules of a chase define it, on the aircraft's own
   -- belly-canopy axis.  With the path within the limit of vertical the band

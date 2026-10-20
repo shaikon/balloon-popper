@@ -669,7 +669,6 @@ class TickSnapshot:
     lua_accel_x: Optional[float] = None
     lua_att_room_lo_deg: Optional[float] = None
     lua_att_room_hi_deg: Optional[float] = None
-    lua_att_omega_ask_dps: Optional[float] = None
     cf_plan_law: Optional[int] = None                # Curve Planner: the steering law the plan was made for
 
 
@@ -1045,7 +1044,7 @@ class CsvLogger:
         'lua_att_theta_deg',  # FC: Lift Vector Pointing: the path's angle off the balloon, read att_lead_s ahead, deg
         'lua_att_u_y',  # FC: Lift Vector Pointing: turn direction across the path, toward the right wing
         'lua_att_u_z',  # FC: Lift Vector Pointing: turn direction across the path, toward the belly
-        'lua_att_omega_dps',  # FC: Lift Vector Pointing: turn rate the path is asked for, the guidance's slowed where the room stops a pull from making it, deg/s
+        'lua_att_omega_dps',  # FC: Lift Vector Pointing: turn rate the path is asked for, deg/s
         'lua_att_f_y_mps2',  # FC: Lift Vector Pointing: force line, push toward the right wing, m/s^2
         'lua_att_f_z_mps2',  # FC: Lift Vector Pointing: force line, push toward the belly, m/s^2
         'lua_att_mu_deg',  # FC: Lift Vector Pointing: roll still to go for the lift side's end of the lift line to face the force line (under a PLAN, to its bank), deg
@@ -1056,7 +1055,6 @@ class CsvLogger:
         'lua_att_room_lo_deg',  # FC: Lift Vector Pointing: farthest roll left from the bank now before bank_proxy_deg leaves the band or the aircraft is upside down, deg; -180 unlimited
         'lua_att_room_hi_deg',  # FC: Lift Vector Pointing: farthest roll right from the bank now before bank_proxy_deg leaves the band or the aircraft is upside down, deg; 180 unlimited
         'cf_plan_law',              # Curve Planner: the steering law the plan was made for, 0 the cascade, 1 Lift Vector Pointing
-        'lua_att_omega_ask_dps',  # FC: Lift Vector Pointing: turn rate the guidance asks the path for, before the room slows it, deg/s
     ]
 
     def __init__(self, path: str = '',
@@ -1496,7 +1494,6 @@ class CsvLogger:
             _opt(s.lua_att_room_lo_deg, ".3f"),
             _opt(s.lua_att_room_hi_deg, ".3f"),
             _opt(s.cf_plan_law, ".0f"),
-            _opt(s.lua_att_omega_ask_dps, ".3f"),
         ])
 
         self._rows_since_flush += 1

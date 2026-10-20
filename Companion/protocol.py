@@ -468,7 +468,7 @@ STATE = (
 # SERIAL BUDGET.  STATE and STATE2 go out on a raw serial port every tick, not
 # through MAVLink.  frame = 4 header + payload + 2 CRC, at 10 bits/byte, 50 Hz,
 # on the 921600 link (port:begin in balloon_chaser_fc.lua, pyserial in main.py):
-#     STATE 240 B + STATE2 234 B payload -> 486 B per tick -> 243 kbps -> 26% of the line   <- here
+#     STATE 240 B + STATE2 230 B payload -> 482 B per tick -> 241 kbps -> 26% of the line   <- here
 # test_link_contract recomputes these figures and fails when they drift.
 STATE2 = (
     Field("seq",               "H", 1.0, "echoes the GUIDE seq, as STATE's does"),
@@ -545,14 +545,12 @@ STATE2 = (
     Field("att_theta_deg",     "f", 1.0, "path's angle off the balloon, read att_lead_s ahead"),
     Field("att_u_y",           "f", 1.0, "turn direction across the path, toward the right wing (unit)"),
     Field("att_u_z",           "f", 1.0, "turn direction across the path, toward the belly (unit)"),
-    Field("att_omega_dps",     "f", 1.0, "turn rate the path is asked for: the guidance's, slowed where "
-                                         "the room stops a pull from making it"),
+    Field("att_omega_dps",     "f", 1.0, "turn rate the path is asked for"),
     Field("att_f_y_mps2",      "f", 1.0, "force line: push across the path toward the right wing, m/s^2"),
     Field("att_f_z_mps2",      "f", 1.0, "force line: push across the path toward the belly, m/s^2"),
     Field("att_mu_deg",        "f", 1.0, "roll still to go for the lift side's end of the lift line to "
                                          "face the force line; under a PLAN, to the PLAN's bank"),
     Field("att_side",          "f", 1.0, "lift side: 1 canopy (pull), -1 belly (push); NaN under a PLAN"),
-    Field("att_omega_ask_dps", "f", 1.0, "turn rate the guidance asks the path for, before the room slows it"),
 )
 
 MESSAGES = {

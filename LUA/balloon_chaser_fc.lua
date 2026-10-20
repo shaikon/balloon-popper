@@ -1571,7 +1571,6 @@ local function step()
     st2.att_omega_dps = pa.log_omega_dps
     st2.att_f_y_mps2, st2.att_f_z_mps2 = pa.log_f_y, pa.log_f_z
     st2.att_mu_deg, st2.att_side = pa.log_mu_deg, pa.log_side
-    st2.att_omega_ask_dps = pa.log_omega_ask_dps
     port:writestring(proto.pack_state2(st2))
   end
 end

@@ -2387,7 +2387,6 @@ class BalloonChaser:
             lua_accel_x=_fc(getattr(self.link, 'lua_accel_x_mps2', None)),
             lua_att_room_lo_deg=getattr(L, 'lua_att_room_lo_deg', None),
             lua_att_room_hi_deg=getattr(L, 'lua_att_room_hi_deg', None),
-            lua_att_omega_ask_dps=getattr(L, 'lua_att_omega_ask_dps', None),
             **self._cf_plan_columns(),
             lua_coord_valid=_bit(L.lua_coord_valid),
             lua_accel_valid=_bit(L.lua_accel_valid),
