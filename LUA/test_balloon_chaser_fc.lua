@@ -1825,7 +1825,8 @@ print("\n16. THE CURVE FLYER, FLOWN CLOSED-LOOP BY EACH LAW")
 -- PLAN's at the turn's progress - until the path points within
 -- CURVE_TURN_DONE_DEG of the balloon, however long that takes, and then flies
 -- the chase without the PLAN; with no PLAN in time it flies without one
--- throughout.  Every check runs under each law.
+-- throughout.  Every check runs under each law, Lift Vector Pointing's
+-- versions P and N included, which fly its plan mode.
 --   The PLANs are the Curve Planner's (Companion/curve_planner.py:
 -- Chase(0, 0, b, speed_mps=18, law=L) and plan(), the times from check()),
 -- each in its law's measure of the bank: for the default p balloon, which no
@@ -1856,7 +1857,8 @@ print("\n16. THE CURVE FLYER, FLOWN CLOSED-LOOP BY EACH LAW")
   local BANK_SLOP_DEG = 5     -- the roll lag's overshoot past the limit
   local TURN_AGREE_S = 0.15
   local CHASE_S = 8.0         -- how long a chase is flown, longer than any turn here
-  local LAW_NAMES = { [0] = "the cascade", [1] = "Lift Vector Pointing" }
+  local LAW_NAMES = { [0] = "the cascade", [1] = "Lift Vector Pointing",
+                      [2] = "Lift Vector Pointing P", [3] = "Lift Vector Pointing N" }
   -- run-in chases: the balloon's position from the start, metres north, east
   -- and down
   local BALLOON_RS = { 142.763, 82.424, 60.0 }   -- 20 deg below, 30 deg right: no rule binds
@@ -1881,6 +1883,9 @@ print("\n16. THE CURVE FLYER, FLOWN CLOSED-LOOP BY EACH LAW")
              lined_s = 0.00, dive_s = 4.75, done_s = 5.95, end_dep = 45.15 },
     },
   }
+  -- P and N fly Lift Vector Pointing's plan mode with its gains: the planner
+  -- makes them its plans, labelled with their own law.
+  PLANS[2], PLANS[3] = PLANS[1], PLANS[1]
   local BAL_R1 = { 0.5, 0.1504, 0.8529 }
   local BAL_G = { cos(rad(30.0)), sin(rad(30.0)), 0.0 }
   -- abeam, level: a PLAN that holds the wings level never turns the path to it
@@ -2131,7 +2136,7 @@ print("\n16. THE CURVE FLYER, FLOWN CLOSED-LOOP BY EACH LAW")
     return climb_err, head_err
   end
 
-  for _, law in ipairs({ 0, 1 }) do
+  for _, law in ipairs({ 0, 1, 2, 3 }) do
     local who = LAW_NAMES[law]
     local plans = PLANS[law]
     local PLAN_P, PLAN_R1 = plans.P, plans.R1
@@ -2195,8 +2200,8 @@ print("\n16. THE CURVE FLYER, FLOWN CLOSED-LOOP BY EACH LAW")
           r.prox_lo >= -lim - BANK_SLOP_DEG and r.prox_hi <= lim + BANK_SLOP_DEG,
           string.format("bank proxy %.1f .. %.1f deg", r.prox_lo, r.prox_hi))
 
-    r = chase(BAL_P, WAIT_TICKS + 2, WAIT_TICKS, PLAN_P, id + 5, 1 - law)
-    check(who .. ": a PLAN made for the other law is not taken",
+    r = chase(BAL_P, WAIT_TICKS + 2, WAIT_TICKS, PLAN_P, id + 5, (law + 1) % 4)
+    check(who .. ": a PLAN made for another law is not taken, even one flown in the same plan mode",
           r.plan_echo == nil and r.states[WAIT_TICKS + 2] == C3.CF_STATE_WAIT,
           string.format("echo %s, state %s", tostring(r.plan_echo),
                         tostring(r.states[WAIT_TICKS + 2])))
@@ -2753,13 +2758,143 @@ print("\n17. LIFT VECTOR POINTING: SELECTED, LOGGED, LIMITED AND CLEARED")
         string.format("pitch %.3f deg/s, integrator %.4f", ce[3], ste.att_pitch_i_dps))
   stubs.feed(pack_excite(0, 0, 0, 0.0, 0.0, 0))
 
+  -- VERSIONS P AND N (steering_law 2 and 3) aim the roll at the force the
+  -- wing, or the body's own forces, must make: the force line less the
+  -- propeller's part across the path.  The push is the propeller line's, from
+  -- ArduPlane's throttle output and the true airspeed along the nose, the EAS
+  -- floored as the pitch trim floors it.  The nose sits AOA_DEG above a level
+  -- path, wings level, the balloon 20 deg up: z' tips AOA_DEG from the body's
+  -- z, so the propeller pushes T sin(AOA_DEG) across the path toward the
+  -- canopy, and N's aim is f + T cos(AOA_DEG) x' on the body's y and z axes.
+  local AOA_DEG = 8.0
+  local LAW_TXT = { [1] = "Lift Vector Pointing", [2] = "P", [3] = "N" }
+  local function nose_up(law, el, az, eas)
+    sim.pitch, sim.vn, sim.vd = rad(AOA_DEG), 18.0, 0.0
+    sim.ax, sim.az = C3.GRAVITY_MPS2 * sin(rad(AOA_DEG)), -C3.GRAVITY_MPS2 * cos(rad(AOA_DEG))
+    sim.eas = eas or 18.0
+    stubs.feed(pack_gain(GAIN_IDX.steering_law, law))
+    stand_down()
+    return aim(el or 20, az or 0)
+  end
+  local function push_of(eas)
+    local floor = math.max(stubs.param_values.AIRSPEED_MIN, 5.0)
+    local tau = srv_scaled[70] / C3.THROTTLE_OUTPUT_FULL
+    local e2t = sim.eas2tas
+    local u = math.max(eas, floor) * e2t * cos(rad(AOA_DEG))
+    return C3.ATT_PROP_SLOPE * tau * (C3.ATT_PROP_SPEED_MPS * tau - u) / (e2t * e2t)
+  end
+  local sa_, ta_ = sin(rad(AOA_DEG)), cos(rad(AOA_DEG))
+  local v1, v1s2 = nose_up(1)
+  local v2, v2s2 = nose_up(2)
+  local v3, v3s2 = nose_up(3)
+  local t_want = push_of(18.0)
+  check("law 1 estimates no push; P and N fly, each the propeller line's push at the throttle "
+        .. "output and the true airspeed along the nose",
+        isnan(v1s2.att_thrust_mps2) and v2.cs_flags & 0x40 ~= 0 and v3.cs_flags & 0x40 ~= 0
+        and math.abs(v2s2.att_thrust_mps2 - t_want) < 1e-4
+        and math.abs(v3s2.att_thrust_mps2 - t_want) < 1e-4
+        and math.abs(v2s2.aoa_deg - AOA_DEG) < 1e-3,
+        string.format("law 1 %s; P %.4f, N %.4f m/s^2 (expected %.4f), aoa %.3f",
+                      tostring(v1s2.att_thrust_mps2), v2s2.att_thrust_mps2,
+                      v3s2.att_thrust_mps2, t_want, v2s2.aoa_deg))
+  check("law 1 aims at the force line itself",
+        v1s2.att_aim_y_mps2 == v1s2.att_f_y_mps2 and v1s2.att_aim_z_mps2 == v1s2.att_f_z_mps2,
+        string.format("aim (%.4f, %.4f), f (%.4f, %.4f)", v1s2.att_aim_y_mps2,
+                      v1s2.att_aim_z_mps2, v1s2.att_f_y_mps2, v1s2.att_f_z_mps2))
+  check("P aims at the force line less the propeller's part across the path: T sin(aoa) less "
+        .. "pull, in the path frame",
+        math.abs(v2s2.att_aim_y_mps2 - v2s2.att_f_y_mps2) < 1e-4
+        and math.abs(v2s2.att_aim_z_mps2 - (v2s2.att_f_z_mps2 + t_want * sa_)) < 1e-4,
+        string.format("aim (%.4f, %.4f), f (%.4f, %.4f), T sin(aoa) %.4f", v2s2.att_aim_y_mps2,
+                      v2s2.att_aim_z_mps2, v2s2.att_f_y_mps2, v2s2.att_f_z_mps2, t_want * sa_))
+  check("N aims at f + T (x_b . x') x' on the body's y and z axes",
+        math.abs(v3s2.att_aim_y_mps2 - v3s2.att_f_y_mps2) < 1e-4
+        and math.abs(v3s2.att_aim_z_mps2 - (v3s2.att_f_z_mps2 * ta_ + t_want * ta_ * sa_)) < 1e-4,
+        string.format("aim (%.4f, %.4f), expected (%.4f, %.4f)", v3s2.att_aim_y_mps2,
+                      v3s2.att_aim_z_mps2, v3s2.att_f_y_mps2,
+                      v3s2.att_f_z_mps2 * ta_ + t_want * ta_ * sa_))
+  local loads_ok, loads_txt = true, {}
+  for law, pair in pairs({ [1] = { v1, v1s2 }, [2] = { v2, v2s2 }, [3] = { v3, v3s2 } }) do
+    local st_, s2_ = pair[1], pair[2]
+    loads_ok = loads_ok and math.abs(st_.att_n_lift + s2_.att_aim_z_mps2 / C3.GRAVITY_MPS2) < 1e-4
+               and math.abs(st_.pitch_trim_lift_term - st_.att_n_lift) < 1e-9
+    loads_txt[#loads_txt + 1] = string.format("%s %.4f g", LAW_TXT[law], st_.att_n_lift)
+  end
+  check("each version asks the wing for its aim's load, -aim_z / g, and the pitch trim reads it",
+        loads_ok, table.concat(loads_txt, ", "))
+  sim.eas_valid = false
+  local _, n2s2 = nose_up(2)
+  local _, n3s2 = nose_up(3)
+  sim.eas_valid = true
+  check("with no airspeed estimate P and N estimate no push: P aims at the force line, N at "
+        .. "its part on the body's y and z axes",
+        isnan(n2s2.att_thrust_mps2) and isnan(n3s2.att_thrust_mps2)
+        and n2s2.att_aim_y_mps2 == n2s2.att_f_y_mps2 and n2s2.att_aim_z_mps2 == n2s2.att_f_z_mps2
+        and math.abs(n3s2.att_aim_z_mps2 - n3s2.att_f_z_mps2 * ta_) < 1e-4,
+        string.format("P aim z %.4f (f_z %.4f), N aim z %.4f", n2s2.att_aim_z_mps2,
+                      n2s2.att_f_z_mps2, n3s2.att_aim_z_mps2))
+  local _, slow2 = nose_up(2, 20, 0, 3.0)
+  check("below the airspeed floor the push is the floor's: the line goes no higher",
+        math.abs(slow2.att_thrust_mps2 - push_of(3.0)) < 1e-4
+        and math.abs(push_of(3.0) - push_of(stubs.param_values.AIRSPEED_MIN)) < 1e-9,
+        string.format("%.4f m/s^2 at 3 m/s (expected %.4f)", slow2.att_thrust_mps2, push_of(3.0)))
+  -- N rolls about the nose: its bank is the Euler roll, its roll the body
+  -- roll rate.
+  sim.roll = rad(30.0)
+  local b1 = nose_up(1)
+  local b3 = nose_up(3)
+  sim.roll = 0.0
+  check("under N the bank the law rolls from is the bank round the nose, the Euler roll",
+        math.abs(b3.att_bank_deg - 30.0) < 1e-4,
+        string.format("N %.4f deg; round the path, as law 1 reads it, %.4f deg",
+                      b3.att_bank_deg, b1.att_bank_deg))
+  local r1 = nose_up(1, 0, 90)
+  local r3 = nose_up(3, 0, 90)
+  check("under N the roll goes out as the body roll rate; law 1's about the path is cos(aoa) of it",
+        math.abs(r3.att_p_dps - r3.att_wx_dps) < 1e-3 and math.abs(r3.att_wx_dps) > 1.0
+        and math.abs(r1.att_p_dps - r1.att_wx_dps * ta_) < 1e-3,
+        string.format("N: p %.4f, roll %.4f; law 1: p %.4f, roll %.4f deg/s", r3.att_p_dps,
+                      r3.att_wx_dps, r1.att_p_dps, r1.att_wx_dps))
+  sim.eas = 18.0
+  -- N's band and upside down are a roll about the nose's: upside down past 90
+  -- deg of bank round the nose wherever the path is, the band where the wing
+  -- tip's lowest point would pass the limit.
+  sim.accel_valid = false
+  stubs.feed(pack_gain(GAIN_IDX.steering_law, 3))
+  local n_push = dive(path_dn - 5.0, path_dn)
+  check(string.format("under N, diving %g deg and pushing, the roll may go 90 deg either way "
+                      .. "before the canopy faces the ground (law 1's limit there is %.2f)",
+                      -path_dn, h_push),
+        math.abs(n_push.att_room_lo_deg + 90.0) < 1e-3 and math.abs(n_push.att_room_hi_deg - 90.0) < 1e-3,
+        string.format("room %.3f .. %.3f", n_push.att_room_lo_deg, n_push.att_room_hi_deg))
+  pitch_to(90.0 - lim + 5.0)
+  stand_down()
+  aim(0, 0)
+  sim.roll = rad(120.0)
+  local n_inv = aim(0, 90)
+  sim.roll = 0.0
+  check("under N, upside down on a steep nose, banked 120, the roll may only come back toward up",
+        n_inv.att_room_hi_deg == 0.0 and n_inv.att_room_lo_deg < -(120.0 - 90.0),
+        string.format("room %.3f .. %.3f", n_inv.att_room_lo_deg, n_inv.att_room_hi_deg))
+  pitch_to(30.0)
+  stand_down()
+  local n30, n30s2 = aim(0, 90)
+  check("under N, nose 30 up the same turn rolls to asin(sin(limit) / cos 30)",
+        math.abs(n30s2.att_mu_deg - edge30) < 1e-3 and math.abs(n30.att_room_hi_deg - edge30) < 1e-3,
+        string.format("roll to go %.3f, room %.3f (expected %.3f)", n30s2.att_mu_deg,
+                      n30.att_room_hi_deg, edge30))
+  pitch_to(0.0)
+  sim.accel_valid = true
+  stubs.feed(pack_gain(GAIN_IDX.steering_law, 1))
+  stand_down()
+
   -- STRAIGHT flies the same law (C-03): the mode changes only the world vector.
   stubs.feed(pack_straight(next_seq())); stubs.advance(DT_MS); update()
   local sts = last_state()
   check("straight flies the same law", (sts.cs_flags & 0x40) ~= 0,
         string.format("cs_flags %d", sts.cs_flags))
 
-  -- NOTHING ALLOCATED PER TICK.
+  -- NOTHING ALLOCATED PER TICK, under each version.
   local real_step = PA.step
   local grew_kb, calls = 0.0, 0
   PA.step = function(...)
@@ -2771,13 +2906,17 @@ print("\n17. LIFT VECTOR POINTING: SELECTED, LOGGED, LIMITED AND CLEARED")
     collectgarbage("restart")
     return p1, q1
   end
-  stand_down()
-  for i = 1, 50 do sim.roll = 0.3 * sin(i * 0.1); aim(-40 + i, 30 + 2 * i) end
-  grew_kb, calls = 0.0, 0
-  for i = 1, 50 do sim.roll = 0.3 * sin(i * 0.1); aim(-40 + i, 30 + 2 * i) end
+  for law = 1, 3 do
+    stubs.feed(pack_gain(GAIN_IDX.steering_law, law))
+    stand_down()
+    for i = 1, 50 do sim.roll = 0.3 * sin(i * 0.1); aim(-40 + i, 30 + 2 * i) end
+    grew_kb, calls = 0.0, 0
+    for i = 1, 50 do sim.roll = 0.3 * sin(i * 0.1); aim(-40 + i, 30 + 2 * i) end
+    check(string.format("PA.step allocates nothing (%s)", LAW_TXT[law]),
+          calls == 50 and grew_kb == 0.0,
+          string.format("%d calls, %.3f KB allocated", calls, grew_kb))
+  end
   PA.step = real_step
-  check("PA.step allocates nothing", calls == 50 and grew_kb == 0.0,
-        string.format("%d calls, %.3f KB allocated", calls, grew_kb))
 
   stubs.feed(pack_gain(GAIN_IDX.steering_law, C3.STEERING_LAW))
   stand_down()
@@ -2785,7 +2924,8 @@ print("\n17. LIFT VECTOR POINTING: SELECTED, LOGGED, LIMITED AND CLEARED")
 end)()
 
 print("\n18. LIFT VECTOR POINTING, FLOWN CLOSED-LOOP ON A RIGID-BODY AIRFRAME")
--- CLAUDE.md "The rules of a chase", with steering_law 1.  The whole FC
+-- CLAUDE.md "The rules of a chase", with steering_law 1, 2 and 3: Lift Vector
+-- Pointing and its versions P and N, each flown whole.  The whole FC
 -- script, its default gains and the pitch trim fitted to the airframe it flies,
 -- steers test_plant.lua's model of the simulated Mini Talon through `p`
 -- chases: the SDF's lift-drag elements, ArduPlane's rate loop on the Acro set,
@@ -2854,7 +2994,6 @@ print("\n18. LIFT VECTOR POINTING, FLOWN CLOSED-LOOP ON A RIGID-BODY AIRFRAME")
     local v = C3[string.upper(name)]
     if type(v) == "number" then frames[#frames + 1] = pack_gain(i, v) end
   end
-  frames[#frames + 1] = pack_gain(GAIN_IDX.steering_law, 1.0)
   frames[#frames + 1] = pack_gain(GAIN_IDX.pitch_trim_offset, t_o)
   frames[#frames + 1] = pack_gain(GAIN_IDX.pitch_trim_lift, t_l)
   frames[#frames + 1] = pack_gain(GAIN_IDX.pitch_trim_attitude, t_a)
@@ -2954,89 +3093,108 @@ print("\n18. LIFT VECTOR POINTING, FLOWN CLOSED-LOOP ON A RIGID-BODY AIRFRAME")
     return r
   end
 
-  local all, t0 = {}, os.clock()
-  for _, bank in ipairs(BANKS_DEG) do
-    for _, lat in ipairs(LATS_DEG) do
-      local lons = (math.abs(lat) == 90) and { 0 } or LONS_DEG
-      for _, lon in ipairs(lons) do all[#all + 1] = chase(lat, lon, bank) end
-    end
+  -- P and N estimate the propeller's push by the propeller line, whose
+  -- defaults are this airframe's own line (test_plant.lua) in its air.
+  local line_err, tau_ = 0.0, THROTTLE_PCT / C3.THROTTLE_OUTPUT_FULL
+  local E = PL.eas2tas
+  for _, u in ipairs({ 14.0, 16.0, 18.0, 20.0 }) do
+    local est = C3.ATT_PROP_SLOPE * tau_ * (C3.ATT_PROP_SPEED_MPS * tau_ - u) / (E * E)
+    line_err = math.max(line_err, math.abs(est - PL.prop_push(tau_, u)))
   end
-  local pball = chase(C3.POINT_LAT_DEG, C3.POINT_LON_DEG, 0)
-  local logc = chase(GAP_LAT_DEG, GAP_LON_DEG, 0, true)
-  local secs = os.clock() - t0
+  check("the propeller line's defaults are the airframe's own push, 14 to 20 m/s",
+        line_err < 1e-3, string.format("at most %.5f m/s^2 apart", line_err))
+  local LAW_NAMES = { [1] = "Lift Vector Pointing", [2] = "Lift Vector Pointing P",
+                      [3] = "Lift Vector Pointing N" }
+  local function sphere(law)
+    local who = LAW_NAMES[law]
+    print(string.format("\n  -- steering_law %d, %s --", law, who))
+    stubs.feed(pack_gain(GAIN_IDX.steering_law, law)); stubs.advance(DT_MS); update()
+    local all, t0 = {}, os.clock()
+    for _, bank in ipairs(BANKS_DEG) do
+      for _, lat in ipairs(LATS_DEG) do
+        local lons = (math.abs(lat) == 90) and { 0 } or LONS_DEG
+        for _, lon in ipairs(lons) do all[#all + 1] = chase(lat, lon, bank) end
+      end
+    end
+    local pball = chase(C3.POINT_LAT_DEG, C3.POINT_LON_DEG, 0)
+    local logc = chase(GAP_LAT_DEG, GAP_LON_DEG, 0, true)
+    local secs = os.clock() - t0
 
-  local missed, t_sum, t_max, n_al = {}, 0.0, 0.0, 0
-  for _, r in ipairs(all) do
-    if r.t_align then
-      n_al = n_al + 1
-      t_sum, t_max = t_sum + r.t_align, math.max(t_max, r.t_align)
-    else
-      missed[#missed + 1] = string.format("lat %+d lon %+d bank %+d: never held, %.2f deg at the closest",
-                                          r.lat, r.lon, r.bank0, r.eps_min)
+    local missed, t_sum, t_max, n_al = {}, 0.0, 0.0, 0
+    for _, r in ipairs(all) do
+      if r.t_align then
+        n_al = n_al + 1
+        t_sum, t_max = t_sum + r.t_align, math.max(t_max, r.t_align)
+      else
+        missed[#missed + 1] = string.format("lat %+d lon %+d bank %+d: never held, %.2f deg at the closest",
+                                            r.lat, r.lon, r.bank0, r.eps_min)
+      end
     end
+    check(string.format("%s: every chase lines up (%d chases over the sphere, wings level and "
+                        .. "banked %d either way)", who, #all, RULE_BANK_DEG),
+          #missed == 0,
+          string.format("%d lined up, after %.2f s on average and %.2f s at the latest (%.0f s to fly); %s",
+                        n_al, n_al > 0 and t_sum / n_al or 0, t_max, secs,
+                        table.concat(missed, " | ", 1, math.min(#missed, 12))))
+    -- the rule: every chase but a balloon behind, and the default p balloon
+    local bad, judged = {}, 0
+    local function judge(r, name)
+      judged = judged + 1
+      local why = {}
+      if r.bank_over > 0.0 then
+        why[#why + 1] = string.format("bank proxy %.2f past the band", r.bank_over)
+      end
+      if r.t_done == nil then why[#why + 1] = "the turn never completes"
+      elseif r.head_dev > C3.CURVE_TURN_DONE_DEG then
+        why[#why + 1] = string.format("heading %.1f off the turn end's", r.head_dev)
+      end
+      if r.tilt_back > C3.TILT_BACK_TRAVEL_DEG then
+        why[#why + 1] = string.format("tilt back %.1f", r.tilt_back)
+      end
+      if r.upside > 0.0 then
+        why[#why + 1] = string.format("upside down, the canopy %.1f below the horizon", r.upside)
+      end
+      if #why > 0 then bad[#bad + 1] = name .. ": " .. table.concat(why, ", ") end
+    end
+    for _, r in ipairs(all) do
+      if not r.behind then
+        judge(r, string.format("lat %+d lon %+d bank %+d", r.lat, r.lon, r.bank0))
+      end
+    end
+    judge(pball, "the default p balloon")
+    check(string.format("%s, the rule: every chase but a balloon behind, and the default p balloon "
+                        .. "(%d chases): no Suboptimal Curve", who, judged),
+          #bad == 0,
+          string.format("%d with one; %s", #bad, table.concat(bad, " | ", 1, math.min(#bad, 12))))
+    -- past the band, by where the balloon starts: ahead of the wing line,
+    -- square to the side, behind
+    local past = { ahead = { n = 0, past = 0, most = 0.0 }, square = { n = 0, past = 0, most = 0.0 },
+                   behind = { n = 0, past = 0, most = 0.0 } }
+    for _, r in ipairs(all) do
+      local p = past[r.ahead and "ahead" or (r.square and "square" or "behind")]
+      p.n = p.n + 1
+      if r.bank_over > 0.0 then p.past = p.past + 1 end
+      p.most = math.max(p.most, r.bank_over)
+    end
+    local function past_txt(p) return string.format("%d of %d past it, %.2f deg at most", p.past, p.n, p.most) end
+    print(string.format("  [INFO] %s: the flown bank proxy past the band, not judged   balloon ahead: %s; "
+                        .. "square to the side: %s; behind: %s", who, past_txt(past.ahead),
+                        past_txt(past.square), past_txt(past.behind)))
+    check(string.format("%s: the default p balloon (%g, %g) from level lines up",
+                        who, C3.POINT_LAT_DEG, C3.POINT_LON_DEG),
+          pball.t_align ~= nil,
+          pball.t_align and string.format("after %.2f s", pball.t_align)
+          or string.format("never held, %.2f deg at the closest", pball.eps_min))
+    check(string.format("%s: a balloon right and below (%g, %g) from level, its force line between "
+                        .. "the band's two ends, keeps its lift side and lines up", who, GAP_LAT_DEG,
+                        GAP_LON_DEG),
+          logc.side_switches <= 1 and logc.t_align ~= nil,
+          string.format("%d side switches, %s", logc.side_switches,
+                        logc.t_align and string.format("lined up after %.2f s", logc.t_align)
+                        or string.format("never held, %.2f deg at the closest", logc.eps_min)))
+
   end
-  check(string.format("every chase lines up (%d chases over the sphere, wings level and "
-                      .. "banked %d either way)", #all, RULE_BANK_DEG),
-        #missed == 0,
-        string.format("%d lined up, after %.2f s on average and %.2f s at the latest (%.0f s to fly); %s",
-                      n_al, n_al > 0 and t_sum / n_al or 0, t_max, secs,
-                      table.concat(missed, " | ", 1, math.min(#missed, 12))))
-  -- the rule: every chase but a balloon behind, and the default p balloon
-  local bad, judged = {}, 0
-  local function judge(r, name)
-    judged = judged + 1
-    local why = {}
-    if r.bank_over > 0.0 then
-      why[#why + 1] = string.format("bank proxy %.2f past the band", r.bank_over)
-    end
-    if r.t_done == nil then why[#why + 1] = "the turn never completes"
-    elseif r.head_dev > C3.CURVE_TURN_DONE_DEG then
-      why[#why + 1] = string.format("heading %.1f off the turn end's", r.head_dev)
-    end
-    if r.tilt_back > C3.TILT_BACK_TRAVEL_DEG then
-      why[#why + 1] = string.format("tilt back %.1f", r.tilt_back)
-    end
-    if r.upside > 0.0 then
-      why[#why + 1] = string.format("upside down, the canopy %.1f below the horizon", r.upside)
-    end
-    if #why > 0 then bad[#bad + 1] = name .. ": " .. table.concat(why, ", ") end
-  end
-  for _, r in ipairs(all) do
-    if not r.behind then
-      judge(r, string.format("lat %+d lon %+d bank %+d", r.lat, r.lon, r.bank0))
-    end
-  end
-  judge(pball, "the default p balloon")
-  check(string.format("the rule: every chase but a balloon behind, and the default p balloon "
-                      .. "(%d chases): no Suboptimal Curve", judged),
-        #bad == 0,
-        string.format("%d with one; %s", #bad, table.concat(bad, " | ", 1, math.min(#bad, 12))))
-  -- past the band, by where the balloon starts: ahead of the wing line,
-  -- square to the side, behind
-  local past = { ahead = { n = 0, past = 0, most = 0.0 }, square = { n = 0, past = 0, most = 0.0 },
-                 behind = { n = 0, past = 0, most = 0.0 } }
-  for _, r in ipairs(all) do
-    local p = past[r.ahead and "ahead" or (r.square and "square" or "behind")]
-    p.n = p.n + 1
-    if r.bank_over > 0.0 then p.past = p.past + 1 end
-    p.most = math.max(p.most, r.bank_over)
-  end
-  local function past_txt(p) return string.format("%d of %d past it, %.2f deg at most", p.past, p.n, p.most) end
-  print(string.format("  [INFO] the flown bank proxy past the band, not judged   balloon ahead: %s; "
-                      .. "square to the side: %s; behind: %s", past_txt(past.ahead),
-                      past_txt(past.square), past_txt(past.behind)))
-  check(string.format("the default p balloon (%g, %g) from level lines up",
-                      C3.POINT_LAT_DEG, C3.POINT_LON_DEG),
-        pball.t_align ~= nil,
-        pball.t_align and string.format("after %.2f s", pball.t_align)
-        or string.format("never held, %.2f deg at the closest", pball.eps_min))
-  check(string.format("a balloon right and below (%g, %g) from level, its force line between "
-                      .. "the band's two ends, keeps its lift side and lines up", GAP_LAT_DEG,
-                      GAP_LON_DEG),
-        logc.side_switches <= 1 and logc.t_align ~= nil,
-        string.format("%d side switches, %s", logc.side_switches,
-                      logc.t_align and string.format("lined up after %.2f s", logc.t_align)
-                      or string.format("never held, %.2f deg at the closest", logc.eps_min)))
+  for law = 1, 3 do sphere(law) end
 
   pv.PTCH_RATE_FF, pv.PTCH_RATE_P = saved_ff, saved_p
   stubs.sim.quat = nil
@@ -3046,8 +3204,8 @@ end)()
 print("\n19. LIFT VECTOR POINTING HOLDS A NEAR-VERTICAL LINE AGAINST A STEADY SIDE FORCE")
 -- Manual flight (mode 2) toward a target at the manual pitch cap, 85 deg up,
 -- from level flight at the default throttle, on test_plant.lua as section 18
--- flies it: steering_law 1, every gain at its default, the pitch trim fitted to
--- the airframe.  In that climb SITL's Talon carries a steady force along its
+-- flies it: steering_law 1, 2 and 3 - Lift Vector Pointing and its versions P
+-- and N - every gain at its default, the pitch trim fitted to the airframe.  In that climb SITL's Talon carries a steady force along its
 -- wing, about 0.6 m/s^2 toward the left wing at a skid of about 1 deg, that
 -- the model's thrust line does not make; the model is given it
 -- (ac.side_force).  With the rudder at zero the only steady lever against a
@@ -3082,7 +3240,6 @@ print("\n19. LIFT VECTOR POINTING HOLDS A NEAR-VERTICAL LINE AGAINST A STEADY SI
     local v = C3[string.upper(name)]
     if type(v) == "number" then frames[#frames + 1] = pack_gain(i, v) end
   end
-  frames[#frames + 1] = pack_gain(GAIN_IDX.steering_law, 1.0)
   frames[#frames + 1] = pack_gain(GAIN_IDX.pitch_trim_offset, t_o)
   frames[#frames + 1] = pack_gain(GAIN_IDX.pitch_trim_lift, t_l)
   frames[#frames + 1] = pack_gain(GAIN_IDX.pitch_trim_attitude, t_a)
@@ -3107,7 +3264,8 @@ print("\n19. LIFT VECTOR POINTING HOLDS A NEAR-VERTICAL LINE AGAINST A STEADY SI
   local tn = cos(rad(TARGET_PITCH_DEG)) * cos(rad(TARGET_YAW_DEG))
   local te = cos(rad(TARGET_PITCH_DEG)) * sin(rad(TARGET_YAW_DEG))
   local td = -sin(rad(TARGET_PITCH_DEG))
-  local function climb(side_force)
+  local function climb(law, side_force)
+    stubs.feed(pack_gain(GAIN_IDX.steering_law, law))
     local ac = PL.new()
     local V0 = PL.trim(0.0, THROTTLE_PCT / 100.0)
     PL.start(ac, V0, THROTTLE_PCT / 100.0, 0.0)
@@ -3156,19 +3314,24 @@ print("\n19. LIFT VECTOR POINTING HOLDS A NEAR-VERTICAL LINE AGAINST A STEADY SI
                          r.rms, r.at_limit, r.n, r.side_switches)
   end
 
-  local calm = climb(0.0)
-  check(string.format("without a side force the climb toward %g deg up lines up, the roll command "
-                      .. "off its limit and one lift side", TARGET_PITCH_DEG),
-        calm.done and calm.t_align ~= nil and calm.at_limit == 0 and calm.side_switches == 0,
-        txt(calm))
-  local pushed = climb(SIDE_FORCE_MPS2)
-  check(string.format("against a steady side force of %.1f m/s^2 along the wing the climb lines up",
-                      math.abs(SIDE_FORCE_MPS2)),
-        pushed.t_align ~= nil, txt(pushed))
-  check(string.format("against a steady side force of %.1f m/s^2 along the wing, once the turn is "
-                      .. "complete the roll command never reaches ACRO_ROLL_RATE and the lift side "
-                      .. "never changes", math.abs(SIDE_FORCE_MPS2)),
-        pushed.done and pushed.at_limit == 0 and pushed.side_switches == 0, txt(pushed))
+  local LAW_NAMES = { [1] = "Lift Vector Pointing", [2] = "Lift Vector Pointing P",
+                      [3] = "Lift Vector Pointing N" }
+  for law = 1, 3 do
+    local who = LAW_NAMES[law]
+    local calm = climb(law, 0.0)
+    check(string.format("%s: without a side force the climb toward %g deg up lines up, the roll "
+                        .. "command off its limit and one lift side", who, TARGET_PITCH_DEG),
+          calm.done and calm.t_align ~= nil and calm.at_limit == 0 and calm.side_switches == 0,
+          txt(calm))
+    local pushed = climb(law, SIDE_FORCE_MPS2)
+    check(string.format("%s: against a steady side force of %.1f m/s^2 along the wing the climb "
+                        .. "lines up", who, math.abs(SIDE_FORCE_MPS2)),
+          pushed.t_align ~= nil, txt(pushed))
+    check(string.format("%s: against a steady side force of %.1f m/s^2 along the wing, once the "
+                        .. "turn is complete the roll command never reaches ACRO_ROLL_RATE and the "
+                        .. "lift side never changes", who, math.abs(SIDE_FORCE_MPS2)),
+          pushed.done and pushed.at_limit == 0 and pushed.side_switches == 0, txt(pushed))
+  end
 
   pv.PTCH_RATE_FF, pv.PTCH_RATE_P = saved_ff, saved_p
   stubs.sim.quat = nil

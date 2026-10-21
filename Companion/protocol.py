@@ -216,8 +216,9 @@ EXCITE = (
 # bank angles, knot k at progress (k-1)/(CURVE_N_KNOTS-1) through the turn,
 # where progress is 1 - (angle off the balloon) / eps0_deg, in that
 # law's own measure of the bank - the bank proxy under the cascade
-# (steering_law 0), the bank round the path under Lift Vector Pointing (1).
-# The FC takes a PLAN only for the law it has selected.  The turn aims at
+# (steering_law 0), the bank round the path under Lift Vector Pointing (1)
+# and its versions P (2) and N (3), which fly its plan mode.  The FC takes a
+# PLAN only for the law it has selected.  The turn aims at
 # the balloon, or for a chase with a run-in (CF_APPROACH_DEG) the run-in line:
 # runin_climb_deg above the horizon toward the balloon's compass direction,
 # held after the turn until the balloon sits runin_dep_deg below the horizon,
@@ -285,7 +286,7 @@ STATE = (
     Field("cs_flags",        "B", 1.0, "bit0 roll_sat, 1 pan_i_frozen, 2 pan_i_clamped, "
                                        "3 pitch_i_frozen, 4 pitch_i_clamped, "
                                        "5 a PLAN set the bank (the cascade's bits 0-2 mean nothing), "
-                                       "6 Lift Vector Pointing flew (bits 0-4 mean nothing), "
+                                       "6 Lift Vector Pointing or its version P or N flew (bits 0-4 mean nothing), "
                                        "7 surface_override"),
     # CASCADE INTERNALS: the ones that matter for tuning - the roll term
     # breakdown, the bank proxy the law actually feeds back, and the
@@ -422,10 +423,11 @@ STATE = (
     # run.  Its other internals are in STATE2.
     Field("att_roll_i_dps",    "f", 1.0, "roll integrator, deg/s of roll about the path"),
     Field("att_pitch_i_dps",   "f", 1.0, "pitch integrator, deg/s of the path's turn"),
-    Field("att_wx_dps",        "f", 1.0, "path-frame rate: roll about the path"),
+    Field("att_wx_dps",        "f", 1.0, "the law's roll: about the path, or about the nose under N without a PLAN"),
     Field("att_wy_dps",        "f", 1.0, "path-frame rate: the path's turn in the lift plane"),
     Field("att_wz_dps",        "f", 1.0, "path-frame rate: the frame's turn about z' under gravity"),
-    Field("att_bank_deg",      "f", 1.0, "bank round the path the law read: the canopy's angle from up, + right wing down"),
+    Field("att_bank_deg",      "f", 1.0, "bank the law rolls from: the canopy's angle from up, + right wing down; "
+                                         "round the path, or round the nose under N without a PLAN"),
     Field("att_band_lo_deg",   "f", 1.0, "lowest bank proxy the chase allows: the bank limit, or the starting proxy beyond it"),
     Field("att_band_hi_deg",   "f", 1.0, "highest bank proxy the chase allows: the bank limit, or the starting proxy beyond it"),
     Field("att_drift_dps",     "f", 1.0, "the bank's drift the roll cancels while the room holds it, "
@@ -468,7 +470,7 @@ STATE = (
 # SERIAL BUDGET.  STATE and STATE2 go out on a raw serial port every tick, not
 # through MAVLink.  frame = 4 header + payload + 2 CRC, at 10 bits/byte, 50 Hz,
 # on the 921600 link (port:begin in balloon_chaser_fc.lua, pyserial in main.py):
-#     STATE 240 B + STATE2 230 B payload -> 482 B per tick -> 241 kbps -> 26% of the line   <- here
+#     STATE 240 B + STATE2 242 B payload -> 494 B per tick -> 247 kbps -> 27% of the line   <- here
 # test_link_contract recomputes these figures and fails when they drift.
 STATE2 = (
     Field("seq",               "H", 1.0, "echoes the GUIDE seq, as STATE's does"),
@@ -549,8 +551,14 @@ STATE2 = (
     Field("att_f_y_mps2",      "f", 1.0, "force line: push across the path toward the right wing, m/s^2"),
     Field("att_f_z_mps2",      "f", 1.0, "force line: push across the path toward the belly, m/s^2"),
     Field("att_mu_deg",        "f", 1.0, "roll still to go for the lift side's end of the lift line to "
-                                         "face the force line; under a PLAN, to the PLAN's bank"),
+                                         "face the aim (att_aim_*); under a PLAN, to the PLAN's bank"),
     Field("att_side",          "f", 1.0, "lift side: 1 canopy (pull), -1 belly (push); NaN under a PLAN"),
+    Field("att_thrust_mps2",   "f", 1.0, "the propeller's push per unit mass P and N estimate, m/s^2; "
+                                         "NaN under law 1 or with no airspeed estimate"),
+    Field("att_aim_y_mps2",    "f", 1.0, "what the roll aims the lift line at, toward the right wing, m/s^2: "
+                                         "the force line (law 1), less the propeller's push across the path "
+                                         "(P), in the path frame; on the body axes (N)"),
+    Field("att_aim_z_mps2",    "f", 1.0, "its part toward the belly, m/s^2; att_n_lift is minus it over g"),
 )
 
 MESSAGES = {

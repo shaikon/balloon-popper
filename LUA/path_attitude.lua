@@ -1,6 +1,8 @@
 -- Auckland University Electrical Engineering Robotics Association - Undergrad Balloon Popper Competition.
 --
--- path_attitude.lua - Lift Vector Pointing, version B (rudder held at zero).
+-- path_attitude.lua - Lift Vector Pointing, version B (rudder held at zero),
+-- and its versions P and N (steering_law C.LAW_LVP, C.LAW_LVP_P and
+-- C.LAW_LVP_N).
 --
 -- Named for what it does: it points the wing's lift vector at the push the
 -- flight path's turn needs.
@@ -41,6 +43,31 @@
 -- the nose swings the path round it, which the law reads as path error and
 -- steers out like any other.
 --
+-- WHAT THE ROLL AIMS AT.  The force line is the push the whole airframe must
+-- make across the path, and the wing is not all that pushes across it: with
+-- the nose off the path, the propeller's push T along the nose has a part
+-- across the path, T * (x_b . y', x_b . z'), x_b the body x axis.  The three
+-- versions differ only in the force the roll brings the lift line onto:
+--   - Lift Vector Pointing aims at the force line f itself, as if the wing
+--     made all of it;
+--   - P aims at the force the wing must make, f less the propeller's part
+--     across the path, read round the path as f is;
+--   - N reads its aim round the nose.  A roll about the nose turns the forces
+--     fixed to the body - the lift and the side force - and neither the
+--     propeller's push along the nose nor the drag along the path.  The body's
+--     forces must make the needed specific force less those two; as the lift
+--     and the side force are square to the path, the needed force along it is
+--     the propeller's share T * (x_b . x') and the drag, and on the body's y
+--     and z axes what the body's forces must make is f + T * (x_b . x') x'.
+--     Its roll goes out as the body roll rate, and its band, upside down and
+--     the drift the room cancels are worked out for a roll about the nose.
+-- T comes from the throttle and the airspeed through the propeller line
+-- (att_prop_speed_mps, att_prop_slope): per unit mass,
+--     T = att_prop_slope / EAS2TAS^2 * tau * (att_prop_speed_mps * tau - u)
+-- tau the throttle output as a fraction of full and u the true airspeed along
+-- the nose, the EAS floored as the pitch trim floors it.  With no airspeed
+-- estimate there is no T, and P and N aim at f.
+--
 -- Why one formula covers shallow and steep paths: on a shallow path gravity is
 -- most of the push, so the lift line stays near canopy-up and a modest bank
 -- turns the aircraft; near vertical gravity does almost nothing across the
@@ -52,6 +79,9 @@
 -- down_by).  Level it is the bank; the steeper the path, the more roll it
 -- takes to dip a wing tip that far, and with the path no further than the
 -- limit from vertical no roll about it does, so there the roll is free.
+-- Under N the roll is about the nose and the same holds for the nose: with
+-- the nose within the limit of vertical, no roll about it dips a wing tip
+-- that far.
 -- Upside down with the wings level reads as no bank.  On the chase's first
 -- tick the band is [min(-limit, b0), max(limit, b0)], b0 the proxy it starts
 -- at, so a start banked beyond the limit may roll back toward it but never
@@ -71,14 +101,15 @@
 --
 -- PLAN MODE.  While the Curve Flyer runs a PLAN (curve_flyer.lua) it hands
 -- the law the balloon to turn the path toward and the bank to hold, measured
--- round the path as the law measures it.  The guidance and the pitch are the
--- law's own; the roll goes to the PLAN's bank instead of facing the force
--- line, held to the band and upside down as any aim point is, so no lift side
--- is chosen; the turn's sideways part is not weighed, since that weighting
--- serves the law's own choice of bank; the roll cancels the bank's drift on
--- every tick, and fades to nothing within CURVE_POLE_FADE_DEG of vertical,
--- where the bank cannot be measured.  The Curve Planner flies a model of this mode
--- (curve_planner.py), so a change here is a change there in the same commit.
+-- round the path.  The guidance and the pitch are the law's own; the roll goes
+-- to the PLAN's bank instead of facing the force line, held to the band and
+-- upside down as any aim point is, so no lift side is chosen; the turn's
+-- sideways part is not weighed, since that weighting serves the law's own
+-- choice of bank; the roll cancels the bank's drift on every tick, and fades
+-- to nothing within CURVE_POLE_FADE_DEG of vertical, where the bank cannot be
+-- measured.  P and N fly this same mode, round the path: no force is aimed
+-- at.  The Curve Planner flies a model of this mode (curve_planner.py), so a
+-- change here is a change there in the same commit.
 --
 -- The law allocates nothing per tick: its state and diagnostics live in the
 -- table M.new() builds at load, filled in place.
@@ -127,6 +158,8 @@ function M.new()
     w_gy = 0.0, w_gz = 0.0, w_theta = 0.0, w_ty = 0.0, w_tz = 0.0,
     w_horiz = false, w_uy = 0.0, w_uz = 0.0, w_om = 0.0,
     w_fy = 0.0, w_fz = 0.0,
+    w_T = 0.0, w_prop_z = 0.0, w_ay = 0.0, w_az = 0.0, w_nose = false,
+    w_nbank = 0.0, w_nR = 0.0,
     w_mu = 0.0, w_clamped = false, w_wf = 0.0, w_plan = false,
     w_proxy = 0.0, w_tip_c = 0.0, w_tip_k = 0.0, w_tip_d = 0.0,
     w_room_lo = 0.0, w_room_hi = 0.0,
@@ -141,6 +174,7 @@ function M.clear_log(st)
   st.log_theta_deg, st.log_theta_now_deg = NAN, NAN
   st.log_u_y, st.log_u_z, st.log_omega_dps = NAN, NAN, NAN
   st.log_f_y, st.log_f_z = NAN, NAN
+  st.log_thrust_mps2, st.log_aim_y, st.log_aim_z = NAN, NAN, NAN
   st.log_mu_deg, st.log_side, st.log_w_f = NAN, NAN, NAN
   st.log_wx_dps, st.log_wy_dps, st.log_wz_dps = NAN, NAN, NAN
   st.log_bank_deg, st.log_drift_dps = NAN, NAN
@@ -185,22 +219,21 @@ local function leave(st, h, r, gap)
   end
 end
 
---- How far the roll may go from the bank now, either way, before the wing
---- tip passes the band: st.w_room_lo (deg, the left) and st.w_room_hi (the
---- right), +-180 where nothing limits it.  After a roll that takes the bank
---- round the path to t, the proxy's sine is c + k * sin(t + d) (guidance), so
---- the band forbids at most two arcs of t: one round the right wing straight
---- down (t + d = 90), one round the left (-90).  No roll may reach into one,
---- so a turn that wants more bank stops at the limit and cannot roll on past
---- the wing tip's lowest point to the far side.  With the path no further
---- than the limit from vertical the arcs vanish.
-local function band_room(st)
+--- How far the roll may go from `bank` (deg), either way, before the wing tip
+--- passes the band: st.w_room_lo (deg, the left) and st.w_room_hi (the right),
+--- +-180 where nothing limits it.  After a roll that takes the bank to t, the
+--- proxy's sine is c + k * sin(t + d) (guidance; under N, c = 0, k = R and
+--- d = 0, below), so the band forbids at most two arcs of t: one round the
+--- right wing straight down (t + d = 90), one round the left (-90).  No roll
+--- may reach into one, so a turn that wants more bank stops at the limit and
+--- cannot roll on past the wing tip's lowest point to the far side.  With the
+--- axis rolled about no further than the limit from vertical the arcs vanish.
+local function band_room(st, bank, c, k, d)
   st.w_room_lo, st.w_room_hi = -180.0, 180.0
-  local k = st.w_tip_k
   if k <= DIR_MIN then return end
-  local x = st.w_bank + st.w_tip_d
-  local s_hi = (sin(rad(st.band_hi)) - st.w_tip_c) / k
-  local s_lo = (sin(rad(st.band_lo)) - st.w_tip_c) / k
+  local x = bank + d
+  local s_hi = (sin(rad(st.band_hi)) - c) / k
+  local s_lo = (sin(rad(st.band_lo)) - c) / k
   local h_hi = (abs(s_hi) < 1.0) and 90.0 - deg(asin(s_hi)) or 0.0
   local h_lo = (abs(s_lo) < 1.0) and 90.0 + deg(asin(s_lo)) or 0.0
   if h_hi + h_lo <= 0.0 then return end
@@ -225,25 +258,14 @@ local function band_room(st)
   end
 end
 
---- The room cut further to upside down, as the rules of a chase define it.
---- The canopy axis, -z of the body, is -pz x' - zz z' in the path frame (y'
---- is square to it), so after a roll that takes the bank round the path to t,
---- world down along it is pz * up_x - zz * um * cos(t): only its part across
---- the path turns with the roll.  Where that is positive the axis meets the
---- ground on the canopy side, so the rule leaves the banks with cos(t) >= q,
---- q = pz * up_x / (zz * um): within h = acos(q) of up either way, every bank
---- for q <= -1, and up alone for q >= 1.  A bank already past h may only roll
---- back toward up.  h is 90 with the nose on the path; pushing in a dive the
---- nose sits below it and h is less: with the wings square to up across the
---- path, the canopy axis tips toward the ground.  Within CURVE_POLE_FADE_DEG
---- of vertical the rule cuts nothing.
-local function upside_room(st)
-  local um, zz = st.w_um, st.w_zz
-  if um <= POLE_SIN or zz <= DIR_MIN then return end
-  local q = st.w_pz * st.w_up_x / (zz * um)
+--- The room cut further to upside down, as the rules of a chase define it:
+--- after a roll that takes the bank to t the rule leaves the banks with
+--- cos(t) >= q, within h = acos(q) of up either way, every bank for q <= -1
+--- and up alone for q >= 1.  A bank already past h may only roll back toward
+--- up.
+local function upside_room(st, b, q)
   if q <= -1.0 then return end
   local h = (q < 1.0) and deg(acos(q)) or 0.0
-  local b = st.w_bank
   if b > h then
     st.w_room_lo, st.w_room_hi = max(st.w_room_lo, -h - b), min(st.w_room_hi, 0.0)
   elseif b < -h then
@@ -255,9 +277,36 @@ end
 
 --- How far the roll may go from the bank now, either way: the band's room,
 --- cut to upside down.
-local function bank_room(st)
-  band_room(st)
-  upside_room(st)
+---
+--- ROUND THE PATH (`nose` false), the canopy axis, -z of the body, is
+--- -pz x' - zz z' in the path frame (y' is square to it), so after a roll that
+--- takes the bank round the path to t, world down along it is
+--- pz * up_x - zz * um * cos(t): only its part across the path turns with the
+--- roll.  Where that is positive the axis meets the ground on the canopy side,
+--- so q = pz * up_x / (zz * um).  h is 90 with the nose on the path; pushing
+--- in a dive the nose sits below it and h is less: with the wings square to up
+--- across the path, the canopy axis tips toward the ground.
+---
+--- ROUND THE NOSE (`nose` true, under N), the bank is phi = atan2(down_y,
+--- down_z), world down in body axes, and R = |(down_y, down_z)| the cosine of
+--- the nose's pitch.  A roll t about the nose leaves down_x and turns the rest,
+--- so world down along the wing axis is R * sin(phi + t), the band's c = 0,
+--- k = R, d = 0, and along the canopy axis -R * cos(phi + t): q = 0, upside
+--- down past 90 deg of bank round the nose either way.
+---
+--- Within CURVE_POLE_FADE_DEG of vertical - the path's, or the nose's - the
+--- rule cuts nothing.
+local function bank_room(st, nose)
+  if nose then
+    band_room(st, st.w_nbank, 0.0, st.w_nR, 0.0)
+    if st.w_nR > POLE_SIN then upside_room(st, st.w_nbank, 0.0) end
+    return
+  end
+  band_room(st, st.w_bank, st.w_tip_c, st.w_tip_k, st.w_tip_d)
+  local um, zz = st.w_um, st.w_zz
+  if um > POLE_SIN and zz > DIR_MIN then
+    upside_room(st, st.w_bank, st.w_pz * st.w_up_x / (zz * um))
+  end
 end
 
 --- One side's roll still to go, held to the room: mu cut to it either way.
@@ -367,46 +416,93 @@ local function turn(st, g, weigh)
   st.w_fz = V * om * uz - st.w_gz
 end
 
---- 2b. THE LIFT SIDE, and the roll still to go for its end of the lift line
---- to face the force line.  The wing pushes along its lift line either way,
---- so the side is the one of the wing line f lies on: the canopy's pulls, the
---- belly's pushes.  A push the room stops from facing f is a pull instead,
---- held to the room like any aim: a cut push turns the path off the turn.
---- The side changes only where f crosses the wing line, or where the belly's
---- facing roll enters or leaves the room as f moves, and the law's own roll
---- brings neither about: rolling the lift line toward f turns the wing line away
---- from it, and which banks the room allows is set by the path, not by the
---- roll.  Choosing instead the side whose push fits f better once the room
---- cuts each side's roll makes a tie the law steers itself onto: between the
---- room's ends lies a range of f no roll faces, and there each cut push bends
---- the path so that f moves toward the middle of that range, where the two
---- sides fit equally, and the side switches on every tick it can.
-local function force_and_side(st)
-  local fy, fz = st.w_fy, st.w_fz
-  bank_room(st)
-  local sd = (fz <= 0.0) and 1 or -1
+--- The propeller's push per unit mass, m/s^2, by the propeller line
+--- (att_prop_speed_mps, att_prop_slope; WHAT THE ROLL AIMS AT, above), or NaN
+--- with no airspeed estimate.  The EAS is floored at the airspeed the pitch
+--- trim floors it at (cfg.airspeed_floor): the line is fitted at flying
+--- speeds, and below them it would go on growing without bound.
+local function prop_push(s, cfg, g)
+  local eas, e2t, thr = cfg.airspeed_eas, cfg.eas2tas, cfg.throttle_out
+  if not (eas and eas == eas and e2t and e2t > 0.0 and thr and thr == thr) then
+    return NAN
+  end
+  local tau = thr / C.THROTTLE_OUTPUT_FULL
+  local u = max(eas, cfg.airspeed_floor or 0.0) * e2t * s.path_bx
+  return (g.att_prop_slope or 0.0) * tau * ((g.att_prop_speed_mps or 0.0) * tau - u)
+         / (e2t * e2t)
+end
+
+--- 2b. WHAT THE ROLL AIMS AT, in the frame the law rolls in, into st.w_ay
+--- (toward the right wing) and st.w_az (toward the belly): the force line f
+--- under Lift Vector Pointing; under P the force the wing must make, f less
+--- the propeller's part across the path, in the path frame; under N the force
+--- the body's own forces must make, f + T * (x_b . x') x', on the body's y and
+--- z axes.  With no estimate of T, P and N aim at f.
+local function aim(st, s, law)
+  local fy, fz, T = st.w_fy, st.w_fz, st.w_T
+  if T ~= T then T = 0.0 end
+  if law == C.LAW_LVP_N then
+    local tx = T * s.path_bx
+    st.w_ay = fy * s.path_yy + fz * s.path_zy + tx * s.path_by
+    st.w_az = fz * s.path_zz + tx * s.path_bz
+  elseif law == C.LAW_LVP_P then
+    st.w_ay, st.w_az = fy - T * s.path_yx, fz - T * s.path_zx
+  else
+    st.w_ay, st.w_az = fy, fz
+  end
+end
+
+--- 2c. THE LIFT SIDE, and the roll still to go for its end of the lift line
+--- to face the aim (ay, az).  The wing pushes along its lift line either way,
+--- so the side is the one of the wing line the aim lies on: the canopy's
+--- pulls, the belly's pushes.  A push the room stops from facing the aim is a
+--- pull instead, held to the room like any aim: a cut push turns the path off
+--- the turn.  The side changes only where the aim crosses the wing line, or
+--- where the belly's facing roll enters or leaves the room as the aim moves,
+--- and the law's own roll brings neither about: rolling the lift line toward
+--- the aim turns the wing line away from it, and which banks the room allows
+--- is set by the path, not by the roll.  Choosing instead the side whose push
+--- fits the aim better once the room cuts each side's roll makes a tie the law
+--- steers itself onto: between the room's ends lies a range of aims no roll
+--- faces, and there each cut push bends the path so that the aim moves toward
+--- the middle of that range, where the two sides fit equally, and the side
+--- switches on every tick it can.
+local function aim_and_side(st)
+  local ay, az = st.w_ay, st.w_az
+  bank_room(st, st.w_nose)
+  local sd = (az <= 0.0) and 1 or -1
   if sd < 0 then
-    local m = deg(atan(-fy, fz))
+    local m = deg(atan(-ay, az))
     if m < st.w_room_lo or m > st.w_room_hi then sd = 1 end
   end
   st.side = sd
-  st.w_mu, st.w_clamped = held(atan(sd * st.w_fy, -sd * st.w_fz), st)
+  st.w_mu, st.w_clamped = held(atan(sd * ay, -sd * az), st)
   -- the roll has a weight only under a PLAN
   st.w_wf = NAN
 end
 
---- 2b, under a PLAN.  The roll still to go to the PLAN's bank (deg, round the
+--- 2c, under a PLAN.  The roll still to go to the PLAN's bank (deg, round the
 --- path), held to the room; no lift side; the roll's weight the fade near
 --- vertical.
 local function planned(st, plan_bank)
-  bank_room(st)
+  bank_room(st, false)
   st.w_mu, st.w_clamped = held(rad(wrap180(plan_bank - st.w_bank)), st)
   st.side = 0
   st.w_wf = clip(st.w_um / POLE_SIN, 0.0, 1.0)
 end
 
---- 3. The path-frame rates, into body axes and limited.  Returns the body
---- roll and pitch rates to send, deg/s.
+--- Under N, the bank round the nose and the cosine of the nose's pitch, from
+--- world down in body axes (bank_room, ROUND THE NOSE).
+local function nose_frame(st, s)
+  local dny, dnz = s.down_by, s.down_bz
+  st.w_nR = sqrt(dny * dny + dnz * dnz)
+  st.w_nbank = deg(atan(dny, dnz))
+end
+
+--- 3. The rates, into body axes and limited.  The roll wx is about the path,
+--- or under N about the nose; wy turns the path in the lift plane and wz
+--- turns the path frame about z'.  Returns the body roll and pitch rates to
+--- send, deg/s.
 local function rates(st, s, cfg, g, dt)
   local V, um, up_x, upy, upz = st.w_V, st.w_um, st.w_up_x, st.w_upy, st.w_upz
   local theta, mu, om, uz = st.w_theta, st.w_mu, st.w_om, st.w_uz
@@ -418,7 +514,7 @@ local function rates(st, s, cfg, g, dt)
   -- Each is held within its ACRO rate: past it nothing it stores is flown.
   -- Under a PLAN the roll's weight fades it near vertical, and the
   -- integrator's input with it.
-  local plan = st.w_plan
+  local plan, nose = st.w_plan, st.w_nose
   local zone = theta < rad(g.att_i_zone_deg or 0.0)
   local roll_ki, pitch_ki = g.att_roll_ki or 0.0, g.att_pitch_ki or 0.0
   if zone and roll_ki ~= 0.0 then
@@ -437,16 +533,33 @@ local function rates(st, s, cfg, g, dt)
   local wx = (g.att_k_roll or 0.0) * mu + st.roll_i
   local wy = om * (-uz) + st.pitch_i
   local wz = st.w_gy / V
-  -- The bank round the path moves as the path turns, with no roll about it
-  -- at all:
-  --     d(bank)/dt = wx - up_x * (up_y * wy + up_z * wz) / um^2
-  -- (world up in the path frame, up_x along the path): up_x / um is the
-  -- tangent of the path's angle to the horizon, capped at TAN_CAP, where the
-  -- bank fades out near vertical.  While the room holds the bank, and on
-  -- every tick a PLAN sets the bank, the roll cancels that drift, a larger
-  -- share of the roll the steeper the path.
+  -- the path frame's turn in body axes, the roll left out
+  local ox = wy * s.path_yx + wz * s.path_zx
+  local oy = wy * s.path_yy + wz * s.path_zy
   st.log_drift_dps = NAN
-  if (st.w_clamped or plan) and um > DIR_MIN then
+  if nose then
+    -- The bank round the nose moves as the frame turns, with no roll about
+    -- the nose at all (the Euler roll's rate):
+    --     d(phi)/dt = p - down_x * (down_y * q + down_z * r) / R^2
+    -- with (p, q, r) the frame's turn in body axes, r = wz * zz (y' has no
+    -- body z part): -down_x / R is the tangent of the nose's pitch, capped at
+    -- TAN_CAP.  While the room holds the bank the roll cancels that drift.
+    local R = st.w_nR
+    if st.w_clamped and R > DIR_MIN then
+      local tg = clip(-s.down_bx / R, -TAN_CAP, TAN_CAP)
+      local drift = ox + tg * (s.down_by * oy + s.down_bz * wz * s.path_zz) / R
+      st.log_drift_dps = deg(drift)
+      wx = wx - drift
+    end
+  elseif (st.w_clamped or plan) and um > DIR_MIN then
+    -- The bank round the path moves as the path turns, with no roll about it
+    -- at all:
+    --     d(bank)/dt = wx - up_x * (up_y * wy + up_z * wz) / um^2
+    -- (world up in the path frame, up_x along the path): up_x / um is the
+    -- tangent of the path's angle to the horizon, capped at TAN_CAP, where the
+    -- bank fades out near vertical.  While the room holds the bank, and on
+    -- every tick a PLAN sets the bank, the roll cancels that drift, a larger
+    -- share of the roll the steeper the path.
     local tg = clip(up_x / um, -TAN_CAP, TAN_CAP)
     local drift = -tg * (upy * wy + upz * wz) / um
     st.log_drift_dps = deg(drift)
@@ -456,8 +569,12 @@ local function rates(st, s, cfg, g, dt)
   st.log_wx_dps, st.log_wy_dps, st.log_wz_dps = deg(wx), deg(wy), deg(wz)
 
   -- Into body axes, then cut at the ACRO rates as ArduPlane cuts them.
-  local p_dps = deg(wx * s.path_bx + wy * s.path_yx + wz * s.path_zx)
-  local q_dps = deg(wx * s.path_by + wy * s.path_yy + wz * s.path_zy)
+  local p_dps, q_dps
+  if nose then
+    p_dps, q_dps = deg(wx + ox), deg(oy)
+  else
+    p_dps, q_dps = deg(wx * s.path_bx + ox), deg(wx * s.path_by + oy)
+  end
   st.log_p_dps, st.log_q_dps = p_dps, q_dps
   p_dps = clip(p_dps, -acro_roll, acro_roll)
   q_dps = clip(q_dps, -acro_pitch, acro_pitch)
@@ -465,14 +582,16 @@ local function rates(st, s, cfg, g, dt)
 end
 
 --- The load the body rates (p_dps, q_dps) ask of the wing, g: the path's turn
---- in the lift plane they make, plus gravity's part across the path.  The
---- pitch trim reads it on a tick the Curve Flyer flies under this law.
-function M.load_of(s, p_dps, q_dps)
+--- in the lift plane they make, plus gravity's part across the path, less
+--- what the propeller pushes across it under P and N (st.w_prop_z, from this
+--- tick's step).  The pitch trim reads it on a tick the Curve Flyer flies
+--- under this law.
+function M.load_of(st, s, p_dps, q_dps)
   local G0 = C.GRAVITY_MPS2
   local V = max(s.path_speed or 0.0, C.FLIGHT_PATH_MIN_SPEED_MPS)
   local wy = rad(p_dps * s.path_yx + q_dps * s.path_yy)
   local gz = G0 * (s.down_bx * s.path_zx + s.down_by * s.path_zy + s.down_bz * s.path_zz)
-  return (V * wy + gz) / G0
+  return (V * wy + gz + st.w_prop_z) / G0
 end
 
 --- One tick.
@@ -480,33 +599,42 @@ end
 --- `s` is the track state track.lua filled this tick: the path frame in body
 --- axes (path_bx..path_zz), world down in body axes (down_bx..down_bz), world
 --- up across the path (up_path_y, up_path_z), the speed (path_speed) and
---- whether the velocity gave the path (path_from_vel).  (bx, by, bz) is the
---- balloon in body axes: the balloon, or under a PLAN the Curve Flyer's.
---- `cfg` carries this tick's specific force (acc_x..z, m/s^2, body) and the
---- ACRO rate limits; `g` the gains; `plan_bank`, deg round the path, the
---- PLAN's bank on a tick the Curve Flyer runs one (PLAN MODE), else nil.
---- Returns the body roll and pitch rates to send, deg/s, after ArduPlane's
---- ACRO limits; st.n_lift is the load the force line asks of the wing, which
---- the pitch trim's lift term reads.
-function M.step(st, s, cfg, g, bx, by, bz, dt, plan_bank)
+--- whether the velocity gave the path (path_from_vel).  `law` is the steering
+--- law, C.LAW_LVP, C.LAW_LVP_P or C.LAW_LVP_N.  (bx, by, bz) is the balloon in
+--- body axes: the balloon, or under a PLAN the Curve Flyer's.  `cfg` carries
+--- this tick's specific force (acc_x..z, m/s^2, body), the ACRO rate limits
+--- and, for the propeller line, the throttle output, the EAS, EAS2TAS and the
+--- airspeed floor; `g` the gains; `plan_bank`, deg round the path, the PLAN's
+--- bank on a tick the Curve Flyer runs one (PLAN MODE), else nil.  Returns the
+--- body roll and pitch rates to send, deg/s, after ArduPlane's ACRO limits;
+--- st.n_lift is the load the law asks of the wing - the aim's part toward the
+--- canopy, in g - which the pitch trim's lift term reads.
+function M.step(st, s, cfg, g, law, bx, by, bz, dt, plan_bank)
   st.ran = true
   guidance(st, s, cfg, g, bx, by, bz)
   st.w_plan = plan_bank ~= nil
   turn(st, g, not st.w_plan)
+  local prop = law == C.LAW_LVP_P or law == C.LAW_LVP_N
+  st.w_T = prop and prop_push(s, cfg, g) or NAN
+  st.w_prop_z = (st.w_T == st.w_T) and st.w_T * s.path_zx or 0.0
+  aim(st, s, law)
+  st.w_nose = law == C.LAW_LVP_N and not st.w_plan
+  if st.w_nose then nose_frame(st, s) end
   if st.w_plan then
     planned(st, plan_bank)
   else
-    force_and_side(st)
+    aim_and_side(st)
   end
   local p_dps, q_dps = rates(st, s, cfg, g, dt)
-  st.n_lift = -st.w_fz / C.GRAVITY_MPS2
+  st.n_lift = -st.w_az / C.GRAVITY_MPS2
   st.log_theta_deg = deg(st.w_theta)
   st.log_u_y, st.log_u_z, st.log_omega_dps = st.w_uy, st.w_uz, deg(st.w_om)
   st.log_f_y, st.log_f_z = st.w_fy, st.w_fz
+  st.log_thrust_mps2, st.log_aim_y, st.log_aim_z = st.w_T, st.w_ay, st.w_az
   st.log_mu_deg, st.log_w_f = deg(st.w_mu), st.w_wf
   -- under a PLAN no lift side is chosen
   st.log_side = st.w_plan and NAN or st.side
-  st.log_bank_deg = st.w_bank
+  st.log_bank_deg = st.w_nose and st.w_nbank or st.w_bank
   st.log_roll_i_dps, st.log_pitch_i_dps = deg(st.roll_i), deg(st.pitch_i)
   st.log_band_lo_deg, st.log_band_hi_deg = st.band_lo, st.band_hi
   st.log_proxy_deg = st.w_proxy

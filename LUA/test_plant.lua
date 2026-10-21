@@ -199,6 +199,19 @@ end
 M.q_mul = q_mul
 
 -- ---------------------------------------------------------------------------
+--- The propeller's push, N, along the body x axis at throttle thr (0-1) and
+--- airspeed u along it, m/s.
+local function prop_force(thr, u)
+  local kt = KT_REF * thr / M.THR_REF
+  return kt * (VP_REF * thr / M.THR_REF - u)
+end
+
+--- The same push per unit mass, m/s^2: what Lift Vector Pointing P and N
+--- estimate.
+function M.prop_push(thr, u)
+  return prop_force(thr, u) / MASS
+end
+
 --- The force and moment about the centre of gravity, body axes, for the body
 --- velocity (u, v, w), rates (p, q, r), joints j and throttle thr; and the
 --- left wing's angle of attack.
@@ -240,8 +253,7 @@ local function forces(u, v, w, p, q, r, j, thr, prop_torque)
       mz = mz + e.cx * ey - e.cy * ex
     end
   end
-  local kt = KT_REF * thr / M.THR_REF
-  local t = kt * (VP_REF * thr / M.THR_REF - u)
+  local t = prop_force(thr, u)
   fx = fx + t
   my = my + MOTOR_Z * t
   mx = mx + prop_torque * t

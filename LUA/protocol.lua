@@ -24,7 +24,7 @@ M.PAYLOAD_SIZE = {
   [3] = 20,   -- EXCITE
   [4] = 36,   -- PLAN
   [129] = 240,   -- STATE
-  [130] = 230,   -- STATE2
+  [130] = 242,   -- STATE2
 }
 
 M.FAULT_SCRIPT_ERROR = 1
@@ -213,7 +213,7 @@ function M.parse_state(s, p, out)
   return out, p
 end
 
--- STATE2: 230 payload bytes
+-- STATE2: 242 payload bytes
 -- into a CALLER-SUPPLIED table so parsing allocates nothing.
 function M.parse_state2(s, p, out)
   out.seq, p = rd_u16(s, p)
@@ -279,6 +279,9 @@ function M.parse_state2(s, p, out)
   out.att_f_z_mps2, p = rd_f32(s, p)
   out.att_mu_deg, p = rd_f32(s, p)
   out.att_side, p = rd_f32(s, p)
+  out.att_thrust_mps2, p = rd_f32(s, p)
+  out.att_aim_y_mps2, p = rd_f32(s, p)
+  out.att_aim_z_mps2, p = rd_f32(s, p)
   return out, p
 end
 
@@ -290,14 +293,14 @@ function M.pack_state(t)
 end
 
 function M.pack_state2(t)
-  local body = string.pack('<I2BBffffffffffffffffffffffffffffffffffffffI2I2I2BBI2ffffffffffffffff', math.floor((t.seq or 0) + 0.5), math.floor((t.flags or 0) + 0.5), math.floor((t.fc_mode or 0) + 0.5), t.q_w or 0, t.q_x or 0, t.q_y or 0, t.q_z or 0, t.gyro_x_rads or 0, t.gyro_y_rads or 0, t.gyro_z_rads or 0, t.vel_n_mps or 0, t.vel_e_mps or 0, t.vel_d_mps or 0, t.eas_mps or 0, t.eas2tas or 0, t.balloon_body_x or 0, t.balloon_body_y or 0, t.balloon_body_z or 0, t.los_elev_deg or 0, t.bank_rate_cmd_dps or 0, t.bank_rate_coupling_dps or 0, t.sideslip_deg or 0, t.aoa_deg or 0, t.yaw_point_i_dps or 0, t.plane_off_nose_deg or 0, t.plane_err_deg or 0, t.plane_axis_up or 0, t.plane_drift_dps or 0, t.plane_ff_dps or 0, t.plane_err_rate_dps or 0, t.plane_d_dps or 0, t.plane_path_share or 0, t.plane_i_dps or 0, t.plane_i_frozen or 0, t.plane_path_deg or 0, t.plane_path_from_vel or 0, t.plane_side or 0, t.out_aileron or 0, t.out_elevator or 0, t.out_rudder or 0, t.out_throttle or 0, math.floor((t.pwm_aileron or 0) + 0.5), math.floor((t.pwm_vtail_l or 0) + 0.5), math.floor((t.pwm_vtail_r or 0) + 0.5), math.floor((t.cf_state or 0) + 0.5), math.floor((t._cf_pad or 0) + 0.5), math.floor((t.cf_plan_id or 0) + 0.5), t.cf_progress or 0, t.cf_eps_deg or 0, t.cf_bank_ref_deg or 0, t.cf_hold_n or 0, t.cf_hold_e or 0, t.cf_hold_d or 0, t.path_turn_up_dps or 0, t.path_turn_right_dps or 0, t.att_theta_deg or 0, t.att_u_y or 0, t.att_u_z or 0, t.att_omega_dps or 0, t.att_f_y_mps2 or 0, t.att_f_z_mps2 or 0, t.att_mu_deg or 0, t.att_side or 0)
+  local body = string.pack('<I2BBffffffffffffffffffffffffffffffffffffffI2I2I2BBI2fffffffffffffffffff', math.floor((t.seq or 0) + 0.5), math.floor((t.flags or 0) + 0.5), math.floor((t.fc_mode or 0) + 0.5), t.q_w or 0, t.q_x or 0, t.q_y or 0, t.q_z or 0, t.gyro_x_rads or 0, t.gyro_y_rads or 0, t.gyro_z_rads or 0, t.vel_n_mps or 0, t.vel_e_mps or 0, t.vel_d_mps or 0, t.eas_mps or 0, t.eas2tas or 0, t.balloon_body_x or 0, t.balloon_body_y or 0, t.balloon_body_z or 0, t.los_elev_deg or 0, t.bank_rate_cmd_dps or 0, t.bank_rate_coupling_dps or 0, t.sideslip_deg or 0, t.aoa_deg or 0, t.yaw_point_i_dps or 0, t.plane_off_nose_deg or 0, t.plane_err_deg or 0, t.plane_axis_up or 0, t.plane_drift_dps or 0, t.plane_ff_dps or 0, t.plane_err_rate_dps or 0, t.plane_d_dps or 0, t.plane_path_share or 0, t.plane_i_dps or 0, t.plane_i_frozen or 0, t.plane_path_deg or 0, t.plane_path_from_vel or 0, t.plane_side or 0, t.out_aileron or 0, t.out_elevator or 0, t.out_rudder or 0, t.out_throttle or 0, math.floor((t.pwm_aileron or 0) + 0.5), math.floor((t.pwm_vtail_l or 0) + 0.5), math.floor((t.pwm_vtail_r or 0) + 0.5), math.floor((t.cf_state or 0) + 0.5), math.floor((t._cf_pad or 0) + 0.5), math.floor((t.cf_plan_id or 0) + 0.5), t.cf_progress or 0, t.cf_eps_deg or 0, t.cf_bank_ref_deg or 0, t.cf_hold_n or 0, t.cf_hold_e or 0, t.cf_hold_d or 0, t.path_turn_up_dps or 0, t.path_turn_right_dps or 0, t.att_theta_deg or 0, t.att_u_y or 0, t.att_u_z or 0, t.att_omega_dps or 0, t.att_f_y_mps2 or 0, t.att_f_z_mps2 or 0, t.att_mu_deg or 0, t.att_side or 0, t.att_thrust_mps2 or 0, t.att_aim_y_mps2 or 0, t.att_aim_z_mps2 or 0)
   local head = string.pack('<I2BB', M.MAGIC, M.MSG_STATE2, #body)
   local hb = head .. body
   return hb .. string.pack('<I2', M.crc16(hb, 1, #hb))
 end
 
 -- SET_GAIN index space, generated from ControlGains field order
--- (59 gains).  Both ends derive from the same dataclass, so
+-- (61 gains).  Both ends derive from the same dataclass, so
 -- inserting a gain upstream shifts Python and Lua together.
 M.GAIN_NAMES = {
   [0] = 'pan_p_gain',
@@ -359,6 +362,8 @@ M.GAIN_NAMES = {
   [56] = 'att_roll_ki',
   [57] = 'att_pitch_ki',
   [58] = 'att_i_zone_deg',
+  [59] = 'att_prop_speed_mps',
+  [60] = 'att_prop_slope',
 }
 
 return M

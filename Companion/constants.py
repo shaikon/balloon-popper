@@ -935,10 +935,23 @@ CF_STATE_RUNIN = 7
 CF_STATE_DIVE = 8
 
 # == THE STEERING LAW, AND LIFT VECTOR POINTING (LUA/path_attitude.lua) ==
-# Which law steers every mode: 0 the cascade (bank-to-turn and roll-to-plane,
-# with the yaw law beside them), 1 Lift Vector Pointing, version B (the
-# rudder held at zero).  One switch for every mode at once (C-03).
-STEERING_LAW = 0
+# Which law steers every mode, one switch for every mode at once (C-03):
+#   LAW_CASCADE  the cascade: bank-to-turn and roll-to-plane, with the yaw law
+#                beside them;
+#   LAW_LVP      Lift Vector Pointing, version B (the rudder held at zero): the
+#                roll aims the lift line at the force line, round the path;
+#   LAW_LVP_P    Lift Vector Pointing P: the roll aims the lift line at the
+#                force the wing must make - the force line less the
+#                propeller's push across the path - round the path;
+#   LAW_LVP_N    Lift Vector Pointing N: the roll aims it at the force the
+#                body's own forces must make, round the nose, and goes out as
+#                the body roll rate.
+# P and N fly Lift Vector Pointing's plan mode and are otherwise its law.
+LAW_CASCADE = 0
+LAW_LVP = 1
+LAW_LVP_P = 2
+LAW_LVP_N = 3
+STEERING_LAW = LAW_CASCADE
 # Standard gravity, m/s^2: the value ArduPilot's GRAVITY_MSS carries.
 GRAVITY_MPS2 = 9.80665
 # Guidance.  The flight path is asked to turn toward the balloon at
@@ -963,6 +976,20 @@ ATT_K_SIDE = 3.0
 ATT_ROLL_KI = 0.5
 ATT_PITCH_KI = 2.0
 ATT_I_ZONE_DEG = 3.0
+# The propeller's push per unit mass, as Lift Vector Pointing P and N
+# estimate it:
+#     T = (ATT_PROP_SLOPE / EAS2TAS^2) * tau * (ATT_PROP_SPEED_MPS * tau - u)
+# tau the throttle output as a fraction of THROTTLE_OUTPUT_FULL, u the true
+# airspeed along the nose.  At one throttle the propeller turns at about one
+# speed, so its pitch speed and its slope both follow the throttle, and its
+# push the air density, 1 / EAS2TAS^2 of sea level's.  ATT_PROP_SPEED_MPS is
+# the true airspeed at which full throttle pushes nothing, m/s;
+# ATT_PROP_SLOPE the push per unit mass, m/s^2, that each m/s below it adds at
+# full throttle in sea-level air, 1/s.  The defaults are test_plant.lua's
+# propeller line, fitted to SITL's climb and dive speeds at 85 % throttle;
+# the aircraft needs its own.
+ATT_PROP_SPEED_MPS = 21.141
+ATT_PROP_SLOPE = 3.4713
 
 # == SIM-ONLY / HUD-COSMETIC: camera horizontal FOV (not in control path) ==
 GIMBAL_FOV_DEG = 60.0

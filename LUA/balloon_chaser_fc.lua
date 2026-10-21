@@ -117,7 +117,7 @@ local g    = {}          -- ControlGains, filled from constants then SET_GAIN
 local cfg  = {}          -- per-tick inputs
 local out  = {}          -- per-tick diagnostics
 local cf   = CF.new()    -- the Curve Flyer and the PLAN it flies
-local pa   = PA.new()    -- Lift Vector Pointing (steering_law 1)
+local pa   = PA.new()    -- Lift Vector Pointing and its versions P and N (steering_law 1-3)
 local guide, set_gain, excite_msg = {}, {}, {}
 local st_msg = {}
 -- STATE2: the rest of the mirror, sent right after STATE (see protocol.py).
@@ -456,7 +456,7 @@ local function rx_pump(now_ms)
                   excite_msg.f0_hz, excite_msg.f1_hz, excite_msg.dur_ms, now_ms)
         elseif msgid == proto.MSG_PLAN then
           proto.parse_plan(rx, q, cf.msg)
-          CF.accept(cf, ((g.steering_law or 0) >= 0.5) and 1 or 0)
+          CF.accept(cf, math.floor((g.steering_law or C.LAW_CASCADE) + 0.5))
         end
         p = p + total
       end
@@ -753,15 +753,17 @@ local function steering()
   -- integrators wind against errors nobody is flying, and the return to ACRO
   -- is a fresh start.  guide.mode is one byte, so 4 * mode stays below 1024.
   local mode_now = vehicle:get_mode()
-  -- Which law steers, every mode at once (C-03): 0 the cascade, 1 Lift
-  -- Vector Pointing.  A change of law is a fresh chase, so neither carries a
-  -- memory of the other's.
-  local use_att = (g.steering_law or 0) >= 0.5
+  -- Which law steers, every mode at once (C-03): C.LAW_CASCADE the cascade,
+  -- C.LAW_LVP Lift Vector Pointing, C.LAW_LVP_P and C.LAW_LVP_N its versions
+  -- P and N (path_attitude.lua), the gain rounded to the law's number.  A
+  -- change of law is a fresh chase, so none carries a memory of another's.
+  local law = math.floor((g.steering_law or C.LAW_CASCADE) + 0.5)
+  local use_att = law >= C.LAW_LVP
   local chase_key = (tracking and 1 or 0)
                    + 2 * (straight_level and 1 or 0)
                    + 4 * (guide.mode or 0)
                    + 1024 * ((mode_now == MODE_ACRO) and 1 or 0)
-                   + 2048 * (use_att and 1 or 0)
+                   + 2048 * law
   local fresh_chase = chase_key ~= s.chase_key_prev
   if fresh_chase then
     s.chase_key_prev = chase_key
@@ -917,7 +919,7 @@ local function steering()
     -- goes on as it goes on the cascade's output: freq-ID's ADDS to the
     -- axis it names, plant-ID's REPLACES it (open loop on that axis, whose
     -- integrator then reaches nothing and is cleared).
-    omega_x, omega_y = PA.step(pa, s, cfg, g, abx, aby, abz, dt, plan_bank)
+    omega_x, omega_y = PA.step(pa, s, cfg, g, law, abx, aby, abz, dt, plan_bank)
     omega_x = omega_x + (cfg.freqid_inject_dps or 0.0)
     omega_y = omega_y + (cfg.freqid_inject_pitch_dps or 0.0)
     if cfg.plantid_override_valid then
@@ -1126,16 +1128,18 @@ local function steering()
   local thr = (cfg.throttle_out or NAN) / C.THROTTLE_OUTPUT_FULL
   local density_ratio = (e2t > 0.0) and 1.0 / (e2t * e2t) or NAN
   -- THE LIFT TERM reads cos(pitch) under the cascade.  Under Lift Vector
-  -- Pointing it reads the load the law asks of the wing: the force
-  -- line's, or on a tick the Curve Flyer owns the chase the load of the rates
-  -- flown, since its PLAN's bank, or the rates held at zero, do not face the
-  -- force line.  1/cos(bank) in a level turn, negative in a push, zero
-  -- straight up, where cos(pitch) is right only in straight, upright flight.
-  -- The trim map fits against what the trim read (pitch_trim_lift_term), so
-  -- its lift gain means the same either way.
+  -- Pointing and its versions it reads the load the law asks of the wing:
+  -- its aim's (path_attitude.lua) - the force line's, under P and N less the
+  -- propeller's push across the path - or on a tick the Curve Flyer owns the
+  -- chase the load of the rates flown, less that push under P and N, since
+  -- its PLAN's bank, or the rates held at zero, do not face the aim.
+  -- 1/cos(bank) in a level turn, negative in a push, zero straight up, where
+  -- cos(pitch) is right only in straight, upright flight.  The trim map fits
+  -- against what the trim read (pitch_trim_lift_term), so its lift gain means
+  -- the same either way.
   local lift_term = math.cos(pitch)
   if use_att then
-    lift_term = cf.active and PA.load_of(s, omega_x, omega_y) or pa.n_lift
+    lift_term = cf.active and PA.load_of(pa, s, omega_x, omega_y) or pa.n_lift
   end
   st_msg.pitch_trim_lift_term = lift_term
   local trim_elev = (g.pitch_trim_offset or 0.0)
@@ -1464,9 +1468,10 @@ local function step()
     -- run they hold an earlier tick's.  Such a tick sends NaN (float fields)
     -- and 0 with flags bit 3 clear (cs_flags), never the stale value.
     -- The track's readings stand whichever law ran; the cascade's internals
-    -- only on a tick the cascade ran.  On a tick Lift Vector Pointing flew,
-    -- cs_flags bit 6 says so and the cascade's bits mean nothing; on a tick
-    -- a PLAN set the bank, under either law, bit 5 does.
+    -- only on a tick the cascade ran.  On a tick Lift Vector Pointing flew
+    -- (law 1, or its version P or N), cs_flags bit 6 says so and the
+    -- cascade's bits mean nothing; on a tick a PLAN set the bank, under any
+    -- law, bit 5 does.
     if law_ran then
       -- The STEERING ERROR track.lua computes, not the encoder angles GUIDE
       -- carries inward: the two are different quantities under similar names.
@@ -1571,6 +1576,8 @@ local function step()
     st2.att_omega_dps = pa.log_omega_dps
     st2.att_f_y_mps2, st2.att_f_z_mps2 = pa.log_f_y, pa.log_f_z
     st2.att_mu_deg, st2.att_side = pa.log_mu_deg, pa.log_side
+    st2.att_thrust_mps2 = pa.log_thrust_mps2
+    st2.att_aim_y_mps2, st2.att_aim_z_mps2 = pa.log_aim_y, pa.log_aim_z
     port:writestring(proto.pack_state2(st2))
   end
 end

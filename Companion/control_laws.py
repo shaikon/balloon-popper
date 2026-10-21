@@ -276,8 +276,11 @@ class ControlGains:
     cf_approach_deg: float = C.CF_APPROACH_DEG
 
     # ---- THE STEERING LAW ------------------------------------------------------
-    # Which law steers every mode: 0 the cascade above, 1 Lift Vector Pointing
-    # (LUA/path_attitude.lua), version B with the rudder held at zero.
+    # Which law steers every mode: C.LAW_CASCADE the cascade above; C.LAW_LVP
+    # Lift Vector Pointing (LUA/path_attitude.lua), version B with the rudder
+    # held at zero; C.LAW_LVP_P and C.LAW_LVP_N its versions P and N, which aim
+    # the roll at the force the wing must make, round the path and round the
+    # nose.
     steering_law: int = C.STEERING_LAW
 
     # ---- LIFT VECTOR POINTING --------------------------------------------------
@@ -295,6 +298,11 @@ class ControlGains:
     att_roll_ki: float = C.ATT_ROLL_KI
     att_pitch_ki: float = C.ATT_PITCH_KI
     att_i_zone_deg: float = C.ATT_I_ZONE_DEG
+    # The propeller line versions P and N estimate its push by: the pitch
+    # speed at full throttle (m/s, true airspeed) and the slope there in
+    # sea-level air (1/s).
+    att_prop_speed_mps: float = C.ATT_PROP_SPEED_MPS
+    att_prop_slope: float = C.ATT_PROP_SLOPE
 
     # @property, not a plain method.  Every caller reads it as an attribute
     # (self._gains.pitch_gains, no parens), so without it they get the

@@ -51,6 +51,8 @@ DEFAULT_CONST = {
     'att_roll_ki': 'ATT_ROLL_KI',
     'att_pitch_ki': 'ATT_PITCH_KI',
     'att_i_zone_deg': 'ATT_I_ZONE_DEG',
+    'att_prop_speed_mps': 'ATT_PROP_SPEED_MPS',
+    'att_prop_slope': 'ATT_PROP_SLOPE',
     'pitch_trim_offset': 'PITCH_TRIM_OFFSET',
     'pitch_trim_lift': 'PITCH_TRIM_LIFT',
     'pitch_trim_attitude': 'PITCH_TRIM_ATTITUDE',
@@ -239,6 +241,11 @@ PARAM_LIMITS = {
     'att_roll_ki':                       (0.0, None),
     'att_pitch_ki':                      (0.0, None),
     'att_i_zone_deg':                    (0.0, 180.0),
+    # The propeller line.  A negative slope makes the push grow with the
+    # airspeed and a negative pitch speed pushes backward at every forward
+    # speed: neither is a propeller.  A slope of 0 is no push.
+    'att_prop_speed_mps':                (0.0, None),
+    'att_prop_slope':                    (0.0, None),
     # Elevator units, either sign: the airframe needs up-elevator level and down
     # in a steep climb, so attitude is negative on this airframe, and thrust is
     # negative when the motor pitches the nose up.  No bound on any: ArduPlane

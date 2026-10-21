@@ -4,6 +4,7 @@ and a summary; writes plans_<stamp>.json beside this file.  Desktop prototype.
 
     python3 Planning/sweep_plans.py            # the default subset, the default steering law
     python3 Planning/sweep_plans.py 1          # ... flown by Lift Vector Pointing
+    python3 Planning/sweep_plans.py 2          # ... by its version P (3: N), which flies its plan mode
 """
 
 import json, math, os, sys, time

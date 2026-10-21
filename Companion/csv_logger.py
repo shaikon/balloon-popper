@@ -670,6 +670,13 @@ class TickSnapshot:
     lua_att_room_lo_deg: Optional[float] = None
     lua_att_room_hi_deg: Optional[float] = None
     cf_plan_law: Optional[int] = None                # Curve Planner: the steering law the plan was made for
+    # Lift Vector Pointing P and N: the propeller line flying this tick, and
+    # from STATE2 the push it estimated and what the roll aimed at.
+    g_att_prop_speed_mps: float = 0.0
+    g_att_prop_slope: float = 0.0
+    lua_att_thrust_mps2: Optional[float] = None
+    lua_att_aim_y_mps2: Optional[float] = None
+    lua_att_aim_z_mps2: Optional[float] = None
 
 
 _CSV_FLUSH_EVERY = 25   # ~0.5 s at 50 Hz - see flush note below.
@@ -1019,7 +1026,7 @@ class CsvLogger:
         'g_cf_approach_deg',        # Curve Planner: Approach Angle, the dive below the horizon a chase's turn ends on, deg
         'cf_plan_runin_climb_deg',  # Curve Planner: the run-in line's angle above the horizon, deg; blank for no run-in
         'cf_plan_runin_dep_deg',    # Curve Planner: the balloon's angle below the horizon that ends the run-in, deg
-        'g_steering_law',  # Steering Law: 0 the cascade, 1 Lift Vector Pointing
+        'g_steering_law',  # Steering Law: 0 the cascade, 1 Lift Vector Pointing, 2 its P, 3 its N
         'g_att_k_path',  # Lift Vector Pointing: path turn rate per rad off the balloon, 1/s
         'g_att_path_rate_max_dps',  # Lift Vector Pointing: cap on the path turn rate, deg/s
         'g_att_lead_s',  # Lift Vector Pointing: how far ahead the path is read, s
@@ -1028,13 +1035,13 @@ class CsvLogger:
         'g_att_roll_ki',  # Lift Vector Pointing: roll integrator gain, 1/s
         'g_att_pitch_ki',  # Lift Vector Pointing: pitch integrator gain, 1/s
         'g_att_i_zone_deg',  # Lift Vector Pointing: angle off the balloon inside which the integrators run, deg
-        'lua_pitch_trim_lift_term',  # FC: the pitch trim's lift term this tick: cos(pitch) under the cascade, the lift load under Lift Vector Pointing
+        'lua_pitch_trim_lift_term',  # FC: the pitch trim's lift term this tick: cos(pitch) under the cascade, the load it asks of the wing under Lift Vector Pointing and its versions
         'lua_att_roll_i_dps',  # FC: Lift Vector Pointing: roll integrator, deg/s of roll about the path
         'lua_att_pitch_i_dps',  # FC: Lift Vector Pointing: pitch integrator, deg/s of the path's turn
-        'lua_att_wx_dps',  # FC: Lift Vector Pointing: roll about the path, deg/s
+        'lua_att_wx_dps',  # FC: Lift Vector Pointing: its roll, deg/s: about the path, or about the nose under N without a PLAN
         'lua_att_wy_dps',  # FC: Lift Vector Pointing: the path's turn in the lift plane, deg/s
         'lua_att_wz_dps',  # FC: Lift Vector Pointing: the path frame's turn about z' under gravity, deg/s
-        'lua_att_bank_deg',  # FC: Lift Vector Pointing: bank round the path it read, the canopy's angle from up, deg, + right wing down
+        'lua_att_bank_deg',  # FC: Lift Vector Pointing: the bank it rolls from, the canopy's angle from up, deg, + right wing down: round the path, or round the nose under N without a PLAN
         'lua_att_band_lo_deg',  # FC: Lift Vector Pointing: lowest bank_proxy_deg the chase allows, deg: the bank limit, or the starting proxy beyond it
         'lua_att_band_hi_deg',  # FC: Lift Vector Pointing: highest bank_proxy_deg the chase allows, deg: the bank limit, or the starting proxy beyond it
         'lua_att_drift_dps',  # FC: Lift Vector Pointing: the bank's drift the roll cancels while the room holds it, and under a PLAN, deg/s
@@ -1047,14 +1054,19 @@ class CsvLogger:
         'lua_att_omega_dps',  # FC: Lift Vector Pointing: turn rate the path is asked for, deg/s
         'lua_att_f_y_mps2',  # FC: Lift Vector Pointing: force line, push toward the right wing, m/s^2
         'lua_att_f_z_mps2',  # FC: Lift Vector Pointing: force line, push toward the belly, m/s^2
-        'lua_att_mu_deg',  # FC: Lift Vector Pointing: roll still to go for the lift side's end of the lift line to face the force line (under a PLAN, to its bank), deg
+        'lua_att_mu_deg',  # FC: Lift Vector Pointing: roll still to go for the lift side's end of the lift line to face the aim, lua_att_aim_* (under a PLAN, to its bank), deg
         'lua_att_side',  # FC: Lift Vector Pointing: lift side, 1 canopy (pull), -1 belly (push); blank under a PLAN
         'lua_att_w_f',  # FC: Lift Vector Pointing: the roll's weight under a PLAN, its fade near vertical, 0-1; blank without one
         'lua_att_n_lift',  # FC: Lift Vector Pointing: load it asks of the wing, g
         'lua_accel_x',  # FC: body longitudinal specific force, m/s^2 (Lift Vector Pointing's lead reads all three axes)
         'lua_att_room_lo_deg',  # FC: Lift Vector Pointing: farthest roll left from the bank now before bank_proxy_deg leaves the band or the aircraft is upside down, deg; -180 unlimited
         'lua_att_room_hi_deg',  # FC: Lift Vector Pointing: farthest roll right from the bank now before bank_proxy_deg leaves the band or the aircraft is upside down, deg; 180 unlimited
-        'cf_plan_law',              # Curve Planner: the steering law the plan was made for, 0 the cascade, 1 Lift Vector Pointing
+        'cf_plan_law',              # Curve Planner: the steering law the plan was made for, 0 the cascade, 1 Lift Vector Pointing, 2 its P, 3 its N
+        'g_att_prop_speed_mps',     # Lift Vector Pointing P and N: the propeller line's pitch speed at full throttle, true airspeed, m/s
+        'g_att_prop_slope',         # Lift Vector Pointing P and N: the propeller line's slope at full throttle in sea-level air, 1/s
+        'lua_att_thrust_mps2',      # FC: Lift Vector Pointing P and N: the propeller's push per unit mass it estimated, m/s^2; blank under law 1 or with no airspeed estimate
+        'lua_att_aim_y_mps2',       # FC: Lift Vector Pointing: what the roll aims the lift line at, toward the right wing, m/s^2 - the force line (1), less the propeller's push across the path (P), path frame; body axes (N)
+        'lua_att_aim_z_mps2',       # FC: Lift Vector Pointing: what the roll aims the lift line at, toward the belly, m/s^2; lua_att_n_lift is minus it over g
     ]
 
     def __init__(self, path: str = '',
@@ -1494,6 +1506,11 @@ class CsvLogger:
             _opt(s.lua_att_room_lo_deg, ".3f"),
             _opt(s.lua_att_room_hi_deg, ".3f"),
             _opt(s.cf_plan_law, ".0f"),
+            f"{s.g_att_prop_speed_mps:.4f}",
+            f"{s.g_att_prop_slope:.4f}",
+            _opt(s.lua_att_thrust_mps2, ".4f"),
+            _opt(s.lua_att_aim_y_mps2, ".4f"),
+            _opt(s.lua_att_aim_z_mps2, ".4f"),
         ])
 
         self._rows_since_flush += 1

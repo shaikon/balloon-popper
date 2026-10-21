@@ -56,7 +56,8 @@ _CS_FLAG_BANK_BITS = 3
 # cs_flags bit 5: a PLAN set the bank, under either law; under the cascade
 # bank-to-turn did not run.
 _CS_FLAG_PLAN_BANK = 0x20
-# cs_flags bit 6: Lift Vector Pointing flew this tick (steering_law 1).
+# cs_flags bit 6: Lift Vector Pointing or its version P or N flew this tick
+# (steering_law 1, 2 or 3).
 _CS_FLAG_PATH_ATTITUDE = 0x40
 
 # The system ID line of ArduPilot's boot banner (send_banner() in

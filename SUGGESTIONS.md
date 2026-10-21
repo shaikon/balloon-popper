@@ -1,9 +1,14 @@
 # SUGGESTIONS.md
 
-Proposals under discussion. Nothing in this file is implemented; adopting any
-of it is an explicit decision, made the way a `TODO.md` item is.
+Proposals under discussion. Adopting any of them is an explicit decision, made
+the way a `TODO.md` item is; a proposal that has been adopted says so, and
+where it now lives.
 
 ## Lift Vector Pointing: aim the roll at the force the wing must make
+
+**Adopted, both versions.** Lift Vector Pointing P is Steering Law 2 and N is
+Steering Law 3 (`LUA/path_attitude.lua`), beside the cascade (0) and Lift
+Vector Pointing itself (1). The numbers below are the implemented laws'.
 
 ### The problem
 
@@ -44,12 +49,18 @@ propeller's part across the path:
 propeller's push per unit mass. The guidance, the pitch, the lift side rule,
 the band and its room, upside down and plan mode are otherwise unchanged.
 
-`T` is not measured on the FC. It needs an estimate from the throttle and the
-airspeed: a propeller model whose two numbers, a pitch speed and a slope, come
-from measurement. `test_plant.lua`'s propeller line is fitted to SITL's climb
-and dive speeds at 85 % throttle; the aircraft needs the same measurement. As
-operator settings they travel in `SET_GAIN`, each with a Gain Tuner row, an
-Info entry and a `g_*` column (CLAUDE.md).
+`T` is not measured on the FC. P and N estimate it from the throttle and the
+airspeed by a straight propeller line, two operator settings carried in
+`SET_GAIN` (the Gain Tuner's Prop Pitch Speed and Prop Slope, logged as
+`g_att_prop_speed_mps` and `g_att_prop_slope`):
+
+    T = att_prop_slope / EAS2TAS² · τ · (att_prop_speed_mps · τ − u)
+
+`τ` the throttle output as a fraction of full and `u` the true airspeed along
+the nose, the EAS floored where the pitch trim floors it. With no airspeed
+estimate there is no `T`, and P and N aim at the force line. The defaults are
+`test_plant.lua`'s propeller line. Each version's pitch trim lift term reads
+the load its own aim asks of the wing.
 
 ### Two versions: the roll error round the path, or round the nose
 
@@ -60,48 +71,65 @@ the nose and the path, a clock round the path asks for the opposite roll, which
 tilts the pull the wing holds away from the balloon). So the change has two
 versions.
 
-- **Version P - round the path, the law's frame now.** The roll error is the
-  angle round the path from the lift line to `f_wing`:
-  `atan2(sd·f_wing,y', −sd·f_wing,z')`. Nothing else moves.
-- **Version N - round the nose, roll-to-plane's frame.** The roll is about the
-  body x axis, which turns the lift and the side force but not the propeller's
-  push along `x_b` nor the drag along the path. The force it must bring the
-  lift line onto is the needed specific force less those two, in the body's
-  y-z plane: `(f + T·(x_b·x')·x')` resolved on `y_b` and `z_b`. The roll
-  error is the angle round `x_b` from the lift line to it, and the roll goes
-  out as the body roll rate.
+- **P - round the path, the law's frame.** The roll error is the angle round
+  the path from the lift line to `f_wing`: `atan2(sd·f_wing,y', −sd·f_wing,z')`.
+  Nothing else moves.
+- **N - round the nose, roll-to-plane's frame.** The roll is about the body x
+  axis, which turns the lift and the side force but not the propeller's push
+  along `x_b` nor the drag along the path. The force it must bring the lift
+  line onto is the needed specific force less those two, in the body's y-z
+  plane: `(f + T·(x_b·x')·x')` resolved on `y_b` and `z_b`. The roll error is
+  the angle round `x_b` from the lift line to it, and the roll goes out as the
+  body roll rate. Its band and upside down are worked out for a roll about the
+  nose: after a roll `t` about it, the wing tip's angle below the horizon has
+  sine `R·sin(φ + t)`, `φ` the bank round the nose (the Euler roll) and `R` the
+  cosine of the nose's pitch, and the canopy faces the ground past
+  `|φ + t| = 90°`. The drift it cancels while the room holds the bank is the
+  Euler roll's rate.
+
+Both fly Lift Vector Pointing's plan mode, round the path, so the Curve Planner
+plans their turns as it plans law 1's.
 
 ### What the desktop model shows
 
-The FC shell test, run whole, and § 19's climb flown 20 s against side forces
-from 0 to 0.9 m/s². `T` is the model's own push, not an estimate, except where
-the table says otherwise.
+The FC shell test, run whole - § 16 (the Curve Flyer) under all four laws,
+§ 17 to § 19 under 1, 2 and 3 - and the 85° climb flown 20 s against side
+forces from 0 to 0.9 m/s². `T` is estimated with the default line, which is
+the model's own push.
 
-| | Now | Version P | Version N |
+| | Lift Vector Pointing (1) | P (2) | N (3) |
 |---|---|---|---|
-| § 19: roll command at the limit, lift side changes | 247 of 506 ticks, 30 | none, none | none, none |
-| § 19: lines up (within `ALIGN_TOL_DEG`) | no | no: holds 0.66° off | no: holds 0.64° off |
-| § 18: sphere chases that line up | 274 of 276 | 276 of 276 | 240 of 276 |
-| § 18: chases with a Suboptimal Curve, of 169 | 122 | 121 | 127 |
-| default `p` balloon lines up after | 4.24 s | 4.74 s | 5.66 s |
-| FC shell test: failing checks, of 275 | 8 | 6 | 7 |
-| the climb at 0 / 0.3 / 0.6 / 0.9 m/s²: roll rate rms | 0.8 / 10 / 91 / 95 °/s | 0.0 / 0.3 / 1.3 / 92 °/s | 0.0 / 0.3 / 1.3 / 91 °/s |
+| § 19 against 0.6 m/s²: roll command at the limit, lift side changes | 240 of 506 ticks, 23 | none, none | none, none |
+| § 19 against 0.6 m/s²: lines up (within `ALIGN_TOL_DEG`) | no: 0.16° at the closest | no: 0.59° | no: 0.57° |
+| § 18: sphere chases that line up | 274 of 276 | 276 of 276 | 276 of 276 |
+| § 18: chases with a Suboptimal Curve, of 169 | 122 | 125 | 124 |
+| default `p` balloon lines up after | 4.24 s | 4.74 s | 4.60 s |
+| the climb at 0 / 0.3 / 0.6 / 0.9 m/s²: roll rate rms after 6 s | 0.8 / 10.6 / 84.1 / 96.5 °/s | 0.0 / 0.4 / 1.5 / 95.3 °/s | 0.0 / 0.3 / 1.5 / 91.2 °/s |
 
-Version P with `T` estimated 30 % low and 30 % high: 276 of 276 chases line
-up, 120 and 121 Suboptimal Curves, the default `p` balloon after 4.98 s and
-4.86 s, and § 19's roll stays off its limit with one lift side.
+§ 16 passes under P and N as under law 1. Of the FC shell test's checks, P and
+N fail only the two law 1 fails in § 18 and § 19 that they do not fix: the
+Suboptimal Curves, and lining up against the side force.
 
-Version N's 36 misses are 27 balloons behind, and 9 ahead of or square to the
-wing line, all from a start banked 60°, six of which the path never came
-within 45° of. It was flown with the path roll's band and room - the limits a
-roll about the nose may go to were not worked out for it - and misses from
-banked starts point at those borrowed limits more than at the error itself;
-that is untested.
+With `T` estimated at half and at 1.5 times the model's push: every sphere
+chase still lines up under both versions; P has 124 and 124 Suboptimal Curves
+and N 120 and 124; the default `p` balloon lines up after 4.24 and 4.50 s (P)
+and 4.62 and 4.64 s (N); and § 19's roll stays off its limit with one lift
+side.
+
+### The propeller line in SITL
+
+The defaults are the desktop model's line, and SITL pushes harder. In the
+85° climb of `flight_log_20261020_231238.csv` - 85 % throttle, about 16 m/s
+EAS, the nose about 7° off the path - the accelerometer along the flight path
+reads 9.8 m/s². That is the push's share along the path less the drag, so the
+push is at least 9.9 m/s², about 1 g. The default line gives 3.7 m/s² there. So in SITL the defaults leave P and N with under 40 % of the
+push, past the half tested above; the line needs fitting to SITL before P
+and N are judged there, and to the aircraft before they fly.
 
 ### What neither version fixes
 
-- **The steady miss against a side force.** § 19's climb holds 0.6-0.7° off
-  the target, outside `ALIGN_TOL_DEG`. The guidance is proportional, so it holds
+- **The steady miss against a side force.** § 19's climb holds 0.6° off the
+  target, outside `ALIGN_TOL_DEG`. The guidance is proportional, so it holds
   off a steady sideways push only by sitting off the target, by about
   `d / (V·k_path)`. A separate change.
 - **A side force larger than gravity's part across the path.** With the rudder
@@ -113,10 +141,7 @@ that is untested.
 
 ### Open questions
 
-- **Which version.** The model favours version P; version N's result may
-  change with its own band and room.
-- **The pitch trim's lift term.** It reads `−f_z/g`, the load the law asks; the
-  wing's own load is now `−f_wing,z'/g`. The tests kept `−f_z/g`, and changing
-  it changes what the trim map fits.
-- **Plan mode** is untouched: its roll goes to the PLAN's bank, so the Curve
-  Planner's model of it needs no change.
+- **Which version to keep.** In the model they differ little; flying both in
+  SITL with a fitted propeller line decides it.
+- **The trim map** fitted under one law is not another's: each reads its own
+  lift term, so it is re-fitted under the law that flies.

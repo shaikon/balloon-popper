@@ -359,14 +359,22 @@ PARAM_INFO = {
         "and roll-to-plane on the roll axis, the pitch pointing law, and yaw "
         "coordination and pointing on the rudder. 1: Lift Vector Pointing, "
         "version B - one law that rolls the wing's lift to face the push the "
-        "turn needs, read in the flight path's own frame, rudder held at zero "
-        "(its own section below). It holds the bank to Bank Lim in every chase, "
-        "measured as the cascade measures it. A change is a fresh chase: both laws start "
-        "from scratch, and any plan in force is dropped: with the Curve Flyer "
-        "on, the law selected flies the p and x turns the Curve Planner plans "
-        "for it, the banks in its own measure. Under 1 the pitch trim's lift "
-        "term reads the load the law asks for instead of cos(pitch), so re-fit "
-        "the trim map ('e') with this set to 1.",
+        "turn needs (the force line), read in the flight path's own frame, "
+        "rudder held at zero (its own section below). 2: Lift Vector Pointing "
+        "P - the same law, the roll aimed at the push the WING must make: the "
+        "force line less the propeller's push across the path, which the nose "
+        "off the path tips across it (Prop Pitch Speed and Prop Slope below). "
+        "3: Lift Vector Pointing N - the same aim, read round the nose instead "
+        "of the path, the roll sent as the body roll rate, its bank limit and "
+        "upside-down limit worked out for a roll about the nose. 1, 2 and 3 "
+        "hold the bank to Bank Lim in every chase, measured as the cascade "
+        "measures it, and fly the same planned turns. A change is a fresh "
+        "chase: every law starts from scratch, and any plan in force is "
+        "dropped: with the Curve Flyer on, the law selected flies the p and x "
+        "turns the Curve Planner plans for it, the banks in its own measure. "
+        "Under 1, 2 and 3 the pitch trim's lift term reads the load the law "
+        "asks of the wing instead of cos(pitch), so re-fit the trim map ('e') "
+        "under the law you fly.",
     'att_k_path':
         "Path Turn Gain (1/s: rad/s of flight-path turn per rad the path is "
         "off the balloon). How hard the guidance asks the path to turn toward "
@@ -419,6 +427,23 @@ PARAM_INFO = {
         "only inside this angle and are cleared outside it: through the turn "
         "they would wind up and overshoot. Larger runs them earlier in the "
         "approach; 0 never runs them.",
+    'att_prop_speed_mps':
+        "Prop Pitch Speed (m/s, true airspeed). The airspeed at which full "
+        "throttle pushes nothing, on the straight line Lift Vector Pointing P "
+        "and N estimate the propeller's push by: push per unit mass = Prop "
+        "Slope / EAS2TAS^2 x throttle x (this x throttle - true airspeed along "
+        "the nose), throttle the output as a fraction of full. Higher "
+        "estimates more push at every speed; with the slope it is fitted from "
+        "the speeds the aircraft holds in a steady climb and a steady dive at "
+        "one throttle. Laws 0 and 1 do not read it.",
+    'att_prop_slope':
+        "Prop Slope (1/s). How much push per unit mass, m/s^2, each m/s of "
+        "true airspeed below Prop Pitch Speed adds at full throttle in "
+        "sea-level air; the FC scales it by the air density (1 / EAS2TAS^2) "
+        "and the throttle. Higher estimates more push below the pitch speed "
+        "and more drag above it. 0 estimates no push, and P and N then aim at "
+        "the force line as law 1 does. With no airspeed estimate the FC "
+        "estimates no push. Laws 0 and 1 do not read it.",
     'yaw_point_pitch_sched':
         "Steep schedule on the pointing output. Off = the rudder pointing term "
         "acts at full strength on any path. On = the output is multiplied by the "
@@ -430,13 +455,13 @@ PARAM_INFO = {
         "gravity across the path to work with and the rudder steers at any "
         "pitch. With Steep 90 / 90 it is 0 except moving straight up or down.",
     'bank_lim_deg':
-        "Maximum bank angle (deg), as both steering laws measure it: the wing "
+        "Maximum bank angle (deg), as every steering law measures it: the wing "
         "tip's angle below the horizon, the bank proxy "
         "asin(sin(roll)cos(pitch)) - the real bank when level; at steep pitch "
         "the same proxy takes more roll, by design. The proxy cannot exceed "
         "asin(cos(pitch)), so at steep pitch the limit is out of its reach and "
         "the roll goes on as far as the turn needs: that is how bank-to-turn "
-        "steers near vertical, and how Lift Vector Pointing (Steering Law 1) "
+        "steers near vertical, and how Lift Vector Pointing (Steering Law 1, 2 or 3) "
         "rolls the lift round to the balloon there. Upside down with the wings "
         "level reads as no bank. It sets the laws' AUTHORITY, not safety: a "
         "smaller limit overshoots less by turning less, and load-factor "
@@ -444,7 +469,7 @@ PARAM_INFO = {
         "Vector Pointing a turn that wants more aims at the limit itself, and "
         "the roll can carry a few degrees past it before it settles; a chase "
         "that starts banked beyond it may roll back toward it but never "
-        "further out. Both laws hold it through a Curve Flyer turn too: a "
+        "further out. Every law holds it through a Curve Flyer turn too: a "
         "planned bank past it is flown at it.",
     'pan_p_gain':
         "Proportional bank gain (deg of bank per deg of pan error). "
@@ -1181,7 +1206,7 @@ def _native_work(what, call):
 # logic, and attr-based selection are unchanged.
 TUNER_GROUPS = [
     ('BOTH LAWS - shared by the cascade and Lift Vector Pointing', [
-        ('Steering Law (0 cascade / 1 Lift Vector Pointing)', 'steering_law'),
+        ('Steering Law (0 cascade / 1 Lift Vector Pointing / 2 P / 3 N)', 'steering_law'),
         ('Bank Lim deg',                  'bank_lim_deg'),
         ('Pitch Trim Offset elev deg',    'pitch_trim_offset'),
         ('Pitch Trim Lift elev deg',      'pitch_trim_lift'),
@@ -1235,7 +1260,7 @@ TUNER_GROUPS = [
         ('Yaw Point Limit deg/s',           'yaw_point_lim'),
         ('Yaw Point Steep Schedule',        'yaw_point_pitch_sched'),
     ]),
-    ('LIFT VECTOR POINTING - the steering law, version B (rudder at zero)', [
+    ('LIFT VECTOR POINTING - laws 1, 2 (P) and 3 (N), rudder at zero', [
         ('Path Turn Gain 1/s',               'att_k_path'),
         ('Path Rate Limit deg/s',            'att_path_rate_max_dps'),
         ('Path Lead s',                      'att_lead_s'),
@@ -1244,6 +1269,8 @@ TUNER_GROUPS = [
         ('Path Roll Ki 1/s',                 'att_roll_ki'),
         ('Path Pitch Ki 1/s',                'att_pitch_ki'),
         ('Integrator Zone deg',              'att_i_zone_deg'),
+        ('Prop Pitch Speed m/s',             'att_prop_speed_mps'),
+        ('Prop Slope 1/s',                   'att_prop_slope'),
     ]),
     ('Autotune', [
         ('Autotune Wide Bracket',       'autotune_bracket_wide'),
@@ -1349,7 +1376,7 @@ DISCRETE_PARAMS = {
     'yaw_point_pitch_sched': [0, 1],         # 0 = steep schedule OFF (default), 1 = ON
     'curve_flyer_enable': [0, 1],            # 0 = no plan (default), 1 = the law flies the planned turn
     'cf_transfer_when_done': [0, 1],         # 0 = the law holds the turn's line, 1 = the law flies on without the plan (default)
-    'steering_law': [0, 1],                  # 0 = the cascade (default), 1 = Lift Vector Pointing
+    'steering_law': [0, 1, 2, 3],            # 0 = the cascade (default), 1 = Lift Vector Pointing, 2 = its P, 3 = its N
     'airspeed_cmd_enable': [0, 1],          # 0 = operator commands THROTTLE (default), 1 = commands AIRSPEED
     'autotune_bracket_wide': [0, 1],
     'autotune_use_constants': [0, 1],

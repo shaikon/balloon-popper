@@ -11,7 +11,9 @@ A plan is a BANK SCHEDULE: CURVE_N_KNOTS banks, each tied to how far through
 the turn the aircraft is (progress 0 at the start, 1 when the path points at
 the balloon), in the law's own measure of the bank - the bank proxy (the wing
 tip's angle below the horizon) under the cascade, the bank round the path
-under Lift Vector Pointing.  The Curve Flyer works out the progress every tick,
+under Lift Vector Pointing and its versions P and N, which fly its plan mode
+(a PLAN made for one of the three is labelled with it, and the FC takes it
+only under that law).  The Curve Flyer works out the progress every tick,
 1 - (angle off the balloon now) / (angle off at the start), and hands the law
 the schedule's bank there; the law flies it with its own roll, pitch, rudder
 and bank limit, its pitch turning the path toward the balloon as it always
@@ -114,18 +116,25 @@ TURN_HORIZON_S = 8.0
 DT_PLAN_S = 0.02           # the planner's integration step (the FC's tick)
 DT_CHECK_S = 0.002         # the check's integration step
 # The steering laws (steering_law), each with the PLAN MODE a PLAN is flown in:
-# the cascade (LUA/cascade.lua) and Lift Vector Pointing (LUA/path_attitude.lua).
-LAW_CASCADE, LAW_LVP = 0, 1
+# the cascade (LUA/cascade.lua), and Lift Vector Pointing (LUA/path_attitude.lua)
+# for itself and its versions P and N.
+LAW_CASCADE, LAW_LVP = C.LAW_CASCADE, C.LAW_LVP
+LAW_LVP_P, LAW_LVP_N = C.LAW_LVP_P, C.LAW_LVP_N
+PLAN_MODE = {LAW_CASCADE: LAW_CASCADE, LAW_LVP: LAW_LVP,
+             LAW_LVP_P: LAW_LVP, LAW_LVP_N: LAW_LVP}
 # The gains each law's plan mode reads, by their ControlGains names.  A Chase
 # takes them from the set the law flies; one not given is its constant's
 # default.
+_LVP_PLAN_GAINS = ('bank_lim_deg', 'att_k_path', 'att_path_rate_max_dps', 'att_lead_s',
+                   'att_k_roll', 'att_roll_ki',
+                   'att_pitch_ki', 'att_i_zone_deg')
 PLAN_GAINS = {
     LAW_CASCADE: ('bank_lim_deg', 'roll_gain', 'pitch_gain', 'pitch_ki',
                   'windup_limit_pitch', 'pitch_deadband_deg', 'pitch_kd',
                   'pitch_kd_rate', 'pitch_turn_ff'),
-    LAW_LVP: ('bank_lim_deg', 'att_k_path', 'att_path_rate_max_dps', 'att_lead_s',
-              'att_k_roll', 'att_roll_ki',
-              'att_pitch_ki', 'att_i_zone_deg'),
+    LAW_LVP: _LVP_PLAN_GAINS,
+    LAW_LVP_P: _LVP_PLAN_GAINS,
+    LAW_LVP_N: _LVP_PLAN_GAINS,
 }
 # control_pitch.lua's own floors: a pitch Ki at or below PITCH_KI_OFF is no
 # integrator, a Kd at or below PITCH_KD_OFF no derivative, and a step no longer
@@ -475,7 +484,7 @@ class PlanMode:
         """The roll and pitch rates, rad/s, the law commands toward balloon direction bd
         (B, 3) at the PLAN's bank b_ref (B, 1), deg in its own measure, after a
         tick of dt since the last."""
-        if chase.law == LAW_LVP:
+        if PLAN_MODE[chase.law] == LAW_LVP:
             return self._lvp(chase, v, c, qa, sp, bd, b_ref, dt)
         return self._cascade(chase, v, c, sp, bd, b_ref, dt)
 
