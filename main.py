@@ -103,10 +103,12 @@ def main():
                              "exit. Tunes the rate loop UNDER the ACRO layer; runs no "
                              "balloon chaser/vision/gimbal. Back up params first if unsure.")
     parser.add_argument("--lua-scripts", metavar="DIR", default=None,
-                        help="ArduPilot scripts directory. Auto-detected when "
-                             "omitted (~/ardupilot/build/sitl/scripts and "
-                             "similar). The .lua files are copied there and "
-                             "verified by hash on every launch.")
+                        help="ArduPilot scripts directory, copied to "
+                             "directly. When omitted: SITL's own scripts "
+                             "directory if it runs on this machine, otherwise "
+                             "the autopilot's, over MAVLink FTP (the real "
+                             "aircraft). The .lua files are verified on every "
+                             "launch and only changed ones are sent.")
     parser.add_argument("--lua-serial", type=int, default=5, metavar="N",
                         help="SERIALn on the flight controller carrying the "
                              "steering link (default 5). Must NOT be the port "
@@ -145,9 +147,18 @@ def main():
                                                        restart_scripting)
         ensure_scripting(link, serial_index=args.lua_serial)
 
-        # 2. Put the scripts on the FC and verify every byte landed.
-        from Companion.adapters.lua_deploy import deploy as _deploy_lua
-        _ok, _scripts_changed, _dest = _deploy_lua(dest_dir=args.lua_scripts)
+        # 2. Put the scripts on the FC and verify every byte landed: a local
+        #    copy when the scripts directory is a path here (--lua-scripts, or
+        #    SITL running on this machine), MAVLink FTP otherwise - the real
+        #    aircraft's SD card.  The eeprom.bin and fixed-path guesses are not
+        #    consulted for that choice: a development machine has them while
+        #    flying the real aircraft, and a copy there is never read.
+        from Companion.adapters.lua_deploy import (
+            deploy as _deploy_lua, deploy_ftp, _sitl_cwd_from_proc)
+        if args.lua_scripts or _sitl_cwd_from_proc():
+            _ok, _scripts_changed, _dest = _deploy_lua(dest_dir=args.lua_scripts)
+        else:
+            _ok, _scripts_changed, _dest = deploy_ftp(link)
         if not _ok:
             raise SystemExit(
                 "[lua] script deployment failed - see the errors above. "

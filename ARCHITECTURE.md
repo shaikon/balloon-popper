@@ -1644,7 +1644,7 @@ fly nothing, and every `.md` is covered by `package_sha256()`.
     │   ├── real_hardware.py
     │   ├── sim_gazebo.py
     │   ├── lua_offload.py           # AutopilotLink DECORATOR: offloads steering to the FC
-    │   ├── lua_deploy.py            # verified script deployment (SHA-256, /proc cwd)
+    │   ├── lua_deploy.py            # verified script deployment: local copy (SHA-256, /proc cwd) or MAVLink FTP (CRC32)
     │   └── lua_setup.py             # SCR_*/SERIALn_*/ARSPD_* check (read-only) + VM reload
     ├── tests/                       # desktop contract checks — DEV ONLY, nothing flies
     │   ├── __init__.py
@@ -1809,9 +1809,31 @@ Because ArduPilot runs everything in `scripts/`, renaming the entry script does
 not retire the old file: the copy an earlier deploy left there keeps running
 beside the new one, on the same serial port, each script claiming the aircraft
 with its own law. `RETIRED_ENTRY_SCRIPTS` in `lua_deploy.py` lists every former
-entry-script name (`pursuit_fc.lua`), and the deploy deletes any it finds. The
-deploy reaches only SITL's directory; on the real aircraft the old file is
-deleted from the SD card by hand.
+entry-script name (`pursuit_fc.lua`), and the deploy deletes any it finds, on
+either route below.
+
+Startup takes one of two routes. With `--lua-scripts`, or SITL running on this
+machine (found through `/proc`), `deploy()` copies to that directory. Otherwise
+`deploy_ftp()` uploads over the MAVLink connection with MAVLink FTP: the real
+aircraft's SD card, or SITL on another machine. The `eeprom.bin` and fixed-path
+guesses play no part in that choice, because a development machine has them
+while it flies the real aircraft, and a copy there is never read.
+
+`deploy_ftp()` finds the scripts directory by asking the autopilot to list each
+`SCRIPTING_DIRECTORY` the firmware can have: `/APM/scripts` on a board, `scripts`
+on SITL, whose FTP server resolves it against its own working directory. The
+firmware creates it at boot while scripting is enabled, so the one that exists is
+the one it reads; neither or both is a refusal. It compares each file's CRC32,
+computed by the autopilot (`AP_Filesystem::crc32`: `crc_crc32` from 0, no
+inversion), with this build's, and sends only the files that differ, so an
+aircraft already holding the build costs one round trip per file. Each upload
+goes to a `.part` name, is checked by CRC, and is renamed into place, the old
+file removed first because FATFS will not rename onto an existing name; ArduPilot
+loads only names ending in `.lua`, so a half-sent file never runs. When anything
+would change and the aircraft is armed, nothing changes and startup stops: the
+reload new scripts need drops the script's control of the aircraft. Replies
+arrive through the telemetry thread's subscriber queues, never a read of its own,
+because the connection has one reader.
 
 Scripts are read when the scripting engine starts. `MAV_CMD_SCRIPTING` (42701) with
 `SCRIPTING_CMD_STOP_AND_RESTART` (3) reloads the VM in place — send it **once**: a
@@ -3668,7 +3690,7 @@ console. None is silent and none is retried.
 | no autopilot | no MAVLink HEARTBEAT within the connect timeout (`_wait_for_heartbeat`) | `No MAVLink heartbeat after Ns.` and the commands to check the autopilot and its port |
 | manifest gate | the FC returns no parameters, a different parameter name set, or a different airframe (`verify_param_manifest`, § "The manifest gate runs first") | `Parameter manifest gate: ...` with the missing, unexpected or wrong names |
 | parameter differences | a checked parameter differs from what the code expects (`halt_on_param_mismatches`) | the list of differences, then a prompt: Enter continues with the FC's values, Ctrl+C stops. With no console to answer, startup refuses |
-| script deployment | the autopilot reads a different scripts directory, a source file is missing, or a copied file fails its hash check (`lua_deploy.deploy`) | `[lua] script deployment failed` after the reason (`REFUSING TO DEPLOY: wrong directory`, `missing from`, `FAILED verification`) |
+| script deployment | the autopilot reads a different scripts directory, a source file is missing, or a copied file fails its hash check (`lua_deploy.deploy`); over MAVLink FTP (`lua_deploy.deploy_ftp`), the scripts differ while the aircraft is armed, the autopilot has no scripts directory or two, an upload fails its CRC check, or the autopilot stops answering | `[lua] script deployment failed` after the reason (`REFUSING TO DEPLOY: wrong directory`, `REFUSING TO DEPLOY: the aircraft is ARMED`, `has no scripts directory`, `missing from`, `FAILED verification`, `MAVLink FTP failed`) |
 | scripting reload | the scripts changed and `MAV_CMD_SCRIPTING` could not reload the engine | `[lua] the scripting engine could not be reloaded` |
 | FC script silent | no STATE from the FC script after the startup waits and one reload | `[lua] the flight controller script is not responding` |
 | Gazebo camera | the camera topic cannot be subscribed | `Failed to subscribe to Gazebo topic` |

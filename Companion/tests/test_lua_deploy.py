@@ -132,6 +132,198 @@ check("main.py checks the parameters before it writes the scripts",
 check("and reloads the VM after writing them",
       _i_write < _i_reload, f"write at {_i_write}, reload at {_i_reload}")
 
+_i_ftp = _main.find('deploy_ftp(link)')
+check("with no local scripts directory it uploads over MAVLink FTP, before the reload",
+      0 <= _i_check < _i_ftp < _i_reload, f"ftp at {_i_ftp}, reload at {_i_reload}")
+
+print("\n11. MAVLINK FTP: THE REAL AIRCRAFT'S SD CARD")
+# A stand-in for ArduPilot's FTP server, following GCS_FTP.cpp at the
+# firmware this project runs: the reply's seq is the request's + 1, a repeated
+# request is answered by resending the last reply, a NAK carries its error in
+# data[0], and FATFS will not rename onto an existing name.  The files live in
+# a temporary directory, "/" stripped as SITL strips it.
+import queue as _queue, struct as _struct, threading as _threading
+from types import SimpleNamespace as _NS
+from pymavlink import mavutil as _mu
+from Companion.adapters.lua_deploy import (deploy_ftp, ap_crc32, FTP_DATA_MAX,
+                                           FTP_PAYLOAD_LEN)
+_M = _mu.mavlink
+_HDR = _struct.Struct("<HBBBBBBI")
+
+class _FakeFtp:
+    def __init__(self, root):
+        self.root = root
+        self.fd = None
+        self.last = None              # (request seq, reply payload)
+        self.drop_every = 0           # drop every Nth reply: a lossy radio
+        self.corrupt = None           # file name whose writes land damaged
+        self.n = 0
+        self.writes = 0
+    def _p(self, data, size):
+        return os.path.join(self.root, data[:size].split(b"\0")[0].decode().lstrip("/"))
+    def handle(self, raw):
+        seq, sess, op, size, _r, _b, _pad, off = _HDR.unpack_from(raw)
+        data = raw[_HDR.size:_HDR.size + size]
+        if self.last and self.last[0] == seq:
+            return self.last[1]
+        ack, body = True, b""
+        def nak(code):
+            return False, bytes([code])
+        try:
+            if op == _M.MAV_FTP_OPCODE_RESETSESSION or op == _M.MAV_FTP_OPCODE_TERMINATESESSION:
+                if self.fd: self.fd.close(); self.fd = None
+            elif op == _M.MAV_FTP_OPCODE_LISTDIRECTORY:
+                p = self._p(data, size)
+                if not os.path.isdir(p): ack, body = nak(_M.MAV_FTP_ERR_FILENOTFOUND)
+                elif not os.listdir(p): ack, body = nak(_M.MAV_FTP_ERR_EOF)
+            elif op == _M.MAV_FTP_OPCODE_CALCFILECRC:
+                p = self._p(data, size)
+                if not os.path.isfile(p): ack, body = nak(_M.MAV_FTP_ERR_FILENOTFOUND)
+                else: body = _struct.pack("<I", ap_crc32(open(p, "rb").read()))
+            elif op == _M.MAV_FTP_OPCODE_CREATEFILE:
+                p = self._p(data, size)
+                self.name = os.path.basename(p)
+                self.fd = open(p, "wb")
+            elif op == _M.MAV_FTP_OPCODE_WRITEFILE:
+                self.writes += 1
+                if self.corrupt and self.name.startswith(self.corrupt):
+                    data = bytes([data[0] ^ 0xFF]) + data[1:]
+                self.fd.seek(off); self.fd.write(data)
+            elif op == _M.MAV_FTP_OPCODE_CREATEDIRECTORY:
+                p = self._p(data, size)
+                if os.path.exists(p): ack, body = nak(_M.MAV_FTP_ERR_FILEEXISTS)
+                else: os.mkdir(p)
+            elif op == _M.MAV_FTP_OPCODE_REMOVEFILE:
+                p = self._p(data, size)
+                if not os.path.exists(p): ack, body = nak(_M.MAV_FTP_ERR_FILENOTFOUND)
+                else: os.remove(p)
+            elif op == _M.MAV_FTP_OPCODE_RENAME:
+                a, b = data[:size].split(b"\0")[:2]
+                pa = os.path.join(self.root, a.decode().lstrip("/"))
+                pb = os.path.join(self.root, b.decode().lstrip("/"))
+                if os.path.exists(pb): ack, body = nak(_M.MAV_FTP_ERR_FILEEXISTS)
+                else: os.rename(pa, pb)
+            else:
+                ack, body = nak(_M.MAV_FTP_ERR_UNKNOWNCOMMAND)
+        except OSError:
+            ack, body = nak(_M.MAV_FTP_ERR_FAIL)
+        reply = (_HDR.pack((seq + 1) & 0xFFFF, sess,
+                           _M.MAV_FTP_OPCODE_ACK if ack else _M.MAV_FTP_OPCODE_NAK,
+                           len(body), op, 0, 0, off) + body).ljust(FTP_PAYLOAD_LEN, b"\0")
+        self.last = (seq, reply)
+        return reply
+
+class _FakeLink:
+    """The parts of MavlinkAutopilotLink deploy_ftp uses: the subscriber queues
+    the telemetry thread feeds, the mav lock, the connection, armed."""
+    def __init__(self, server):
+        self.server, self.armed, self._qs = server, False, []
+        self._mav_lock = _threading.Lock()
+        self.master = _NS(source_system=255, source_component=190,
+                          target_system=1, target_component=1,
+                          mav=_NS(file_transfer_protocol_send=self._send))
+    def _send(self, net, sysid, compid, payload):
+        assert len(payload) == FTP_PAYLOAD_LEN
+        reply = self.server.handle(bytes(payload))
+        self.server.n += 1
+        if self.server.drop_every and self.server.n % self.server.drop_every == 0:
+            return
+        # A ground station's FTP reply on the same link, for another system:
+        # never taken for ours.
+        for q in self._qs:
+            q.put(_NS(target_system=200, target_component=190, payload=list(reply)))
+            q.put(_NS(target_system=255, target_component=190, payload=list(reply)))
+    def _subscribe(self, *types, maxsize=50):
+        q = _queue.Queue(); self._qs.append(q); return q
+    def _unsubscribe(self, q, *types):
+        self._qs.remove(q)
+    def _wait_msg(self, q, timeout):
+        try: return q.get(timeout=timeout)
+        except _queue.Empty: return None
+
+import Companion.adapters.lua_deploy as _ldm
+_ldm.FTP_REPLY_TIMEOUT_S = 0.05
+_src = os.path.join(_root, "LUA")
+def _remote(fs, name):
+    return os.path.join(fs, "APM", "scripts",
+                        name if name in ENTRY_SCRIPTS else os.path.join("modules", name))
+def _same(fs, name):
+    return open(_remote(fs, name), "rb").read() == open(os.path.join(_src, name), "rb").read()
+
+_fs = tempfile.mkdtemp()
+os.makedirs(os.path.join(_fs, "APM", "scripts"))       # made at boot (AP_Scripting::init)
+for bad in ("ap_shim.lua", RETIRED_ENTRY_SCRIPTS[0], MODULES[0]):
+    open(os.path.join(_fs, "APM", "scripts", bad), "w").write("-- stale\n")
+_srv = _FakeFtp(_fs); _lk = _FakeLink(_srv)
+_srv.drop_every = 7
+ok, changed, dest = deploy_ftp(_lk)
+check("first upload succeeds through a radio that loses every 7th reply", ok and changed, dest)
+check("into the board's /APM/scripts: entry script there, modules in modules/",
+      all(_same(_fs, n) for n in ENTRY_SCRIPTS + MODULES))
+check("the strays, a stale ap_shim.lua and the retired entry script are removed",
+      sorted(os.listdir(os.path.join(_fs, "APM", "scripts"))) == sorted(list(ENTRY_SCRIPTS) + ["modules"]),
+      str(os.listdir(os.path.join(_fs, "APM", "scripts"))))
+check("no .part file is left behind",
+      not any(f.endswith(".part") for f in os.listdir(os.path.join(_fs, "APM", "scripts", "modules"))))
+_srv.drop_every = 0
+
+_srv.writes = 0
+ok, changed, _ = deploy_ftp(_lk)
+check("an unchanged aircraft: no change reported, nothing written",
+      ok and not changed and _srv.writes == 0, f"{_srv.writes} writes")
+
+_target = _remote(_fs, "path_attitude.lua")
+open(_target, "ab").write(b"-- edited on the card\n")
+_srv.writes = 0
+ok, changed, _ = deploy_ftp(_lk)
+_size = os.path.getsize(os.path.join(_src, "path_attitude.lua"))
+check("one file that differs is the only one sent, and it is repaired",
+      ok and changed and _same(_fs, "path_attitude.lua")
+      and _srv.writes == -(-_size // FTP_DATA_MAX), f"{_srv.writes} writes")
+
+open(_target, "ab").write(b"-- edited again\n")
+_lk.armed = True
+_before = open(_target, "rb").read()
+ok, changed, _ = deploy_ftp(_lk)
+check("ARMED with a file that differs: refused and nothing changed",
+      not ok and not changed and open(_target, "rb").read() == _before)
+_lk.armed = False
+os.remove(_target)
+_lk.armed = True
+ok, changed, _ = deploy_ftp(_lk)
+check("armed with a file missing from the card: refused too", not ok and not changed)
+_lk.armed = False
+ok, _, _ = deploy_ftp(_lk)
+_lk.armed = True
+ok2, changed2, _ = deploy_ftp(_lk)
+check("armed with every file current: passes, nothing to change", ok and ok2 and not changed2)
+_lk.armed = False
+
+open(_target, "ab").write(b"-- edited\n")
+_srv.corrupt = "path_attitude.lua"
+ok, changed, _ = deploy_ftp(_lk)
+_srv.corrupt = None
+check("a file damaged on the way fails verification and is never renamed into place",
+      not ok and changed and open(_target, "rb").read().endswith(b"-- edited\n")
+      and not os.path.exists(_target + ".part"))
+
+_fs2 = tempfile.mkdtemp()
+os.makedirs(os.path.join(_fs2, "scripts"))           # SITL: ./scripts
+ok, changed, dest = deploy_ftp(_FakeLink(_FakeFtp(_fs2)))
+check("SITL's ./scripts is found the same way",
+      ok and changed and os.path.isfile(os.path.join(_fs2, "scripts", ENTRY_SCRIPTS[0])), dest)
+os.makedirs(os.path.join(_fs2, "APM", "scripts"))
+ok, changed, _ = deploy_ftp(_FakeLink(_FakeFtp(_fs2)))
+check("both directories present: refused, it cannot tell which is read", not ok and not changed)
+ok, changed, _ = deploy_ftp(_FakeLink(_FakeFtp(tempfile.mkdtemp())))
+check("no scripts directory (scripting off at boot): refused", not ok and not changed)
+
+class _Silent(_FakeLink):
+    def _send(self, *a):
+        pass
+ok, changed, _ = deploy_ftp(_Silent(_FakeFtp(_fs)))
+check("an autopilot that never answers: fails, nothing changed", not ok and not changed)
+
 print("\n" + "=" * 70)
 print("PASSED" if not fails else f"FAILED: {fails}"); print("=" * 70)
 sys.exit(1 if fails else 0)
