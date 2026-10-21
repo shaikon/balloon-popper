@@ -1877,7 +1877,8 @@ the PLAN),
 Lua desktop drivers in `LUA/` that exercise each module against `ap_shim`, the
 closed-loop sections of `test_balloon_chaser_fc.lua` - § 15 the cascade under
 the rules of a chase, § 16 the Curve Flyer under each law, § 18 Lift Vector
-Pointing over the whole sphere - which fly the whole script on desktop aircraft
+Pointing over the whole sphere, § 19 Lift Vector Pointing holding a
+near-vertical line against a steady side force - which fly the whole script on desktop aircraft
 (point masses, and `test_plant.lua`'s rigid body), and
 analysis of the flight log after a run. There is no offline replay of either
 law. The script also loads and runs on a SITL build of the pinned firmware
@@ -2758,8 +2759,11 @@ the lead reads `lua_accel_x`, `lua_accel_y` and `lua_accel_z`.
   fitted to SITL rather than read from the SDF: `MIXING_GAIN`, the V-tail
   mixer's gain, so the model's trim elevator matches the SITL trim map's, and
   `AIL_GAIN`, the aileron's effectiveness, so its roll-rate feedforward matches
-  the `RLL_RATE_FF` ArduPlane AUTOTUNE finds in SITL. It is not SITL: a pass
-  there is evidence about this model.
+  the `RLL_RATE_FF` ArduPlane AUTOTUNE finds in SITL. A test can add a steady
+  side force along the body y axis (`ac.side_force`), standing in for what the
+  propeller's slipstream and torque do to SITL's airframe at high throttle,
+  which the thrust line leaves out. It is not SITL: a pass there is evidence
+  about this model.
 - **`test_balloon_chaser_fc.lua` § 17** checks the law's pieces: selection,
   straight flying the same law, the logging, no yaw sent and the rudder held at
   zero, the pitch trim's lift term under each law, the ACRO limits, the
@@ -2768,8 +2772,8 @@ the lead reads `lua_accel_x`, `lua_accel_y` and `lua_accel_z`.
   mid-chase. It checks the lift side - wings level, a pull with f on the
   canopy's side of the wing line and a push on the belly's side where the belly
   faces it, a pull instead of a push the room stops, and a pull when banked to
-  the limit with f below the horizon on the canopy's side - the turn the room
-  allows, and upside down: in a dive the canopy axis meets the ground before
+  the limit with f below the horizon on the canopy's side - and upside down: in
+  a dive the canopy axis meets the ground before
   90 deg of bank pushing and after it pulling, and banked 120 deg on a steep
   path the roll may only come back toward up.
 - **§ 18** flies the law closed loop on `test_plant.lua`'s airframe over the
@@ -2778,6 +2782,15 @@ the lead reads `lua_accel_x`, `lua_accel_y` and `lua_accel_z`.
   where its balloon started. It also flies a balloon right and below whose force
   line, from level, lies between the band's two ends, and checks that it keeps
   its lift side (at most one switch) and lines up.
+- **§ 19** flies a manual climb toward a target at the 85 deg pitch cap on the
+  same airframe, at the default throttle, twice: as the model flies it, and with
+  a steady side force of 0.6 m/s^2 along the wing, the size SITL's Talon
+  carries in that climb. Each must line up, and once the turn is complete the
+  roll command must stay off `ACRO_ROLL_RATE` with one lift side. With the
+  rudder at zero, the only steady lever against a force along the wing is
+  gravity's part across the path, about g cos 85 deg, through the bank: the
+  line is held only at the bank where the two cancel, and the force line the
+  law aims its roll at is what is left of gravity's part there.
 
 ---
 

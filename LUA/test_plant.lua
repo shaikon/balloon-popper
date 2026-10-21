@@ -10,7 +10,10 @@
 -- is AltitudeLiftDrag::Update's (upstream LiftDrag's) with the stall left
 -- out: past the stall angle the lift keeps its slope.  The propeller is a
 -- thrust line through SITL's climb and dive speeds rather than the SDF's two
--- blade elements.
+-- blade elements.  A test can add a steady side force along the body y
+-- axis (ac.side_force), standing in for what the propeller's slipstream and
+-- torque do to SITL's airframe at high throttle, which the thrust line leaves
+-- out.
 --
 -- THE RATE LOOP is ArduPlane's: AC_PID on the rate error times the speed
 -- scaler squared (AP_FW_Controller::_get_rate_out), its FLTT / FLTE / FLTD
@@ -371,6 +374,7 @@ local function deriv(ac, vn, ve, vd, qw, qx, qy, qz, p, q, r)
   local v = r01 * vn + r11 * ve + r21 * vd
   local w = r02 * vn + r12 * ve + r22 * vd
   local fx, fy, fz, mx, my, mz = forces(u, v, w, p, q, r, ac.j, ac.thr, ac.prop_torque)
+  fy = fy + ac.side_force * MASS
   local an = (r00 * fx + r01 * fy + r02 * fz) / MASS
   local ae = (r10 * fx + r11 * fy + r12 * fz) / MASS
   local ad = (r20 * fx + r21 * fy + r22 * fz) / MASS + G0
@@ -390,6 +394,7 @@ function M.new()
     vn = 0.0, ve = 0.0, vd = 0.0, qw = 1.0, qx = 0.0, qy = 0.0, qz = 0.0,
     p = 0.0, q = 0.0, r = 0.0, j = { 0.0, 0.0, 0.0, 0.0 }, thr = M.THR_REF,
     prop_torque = PROP_TORQUE_PER_N, fx = 0.0, fy = 0.0, fz = 0.0,
+    side_force = 0.0,                  -- m/s^2 along the body y axis, + toward the right wing
     roll_pid = new_pid(M.ACRO.RLL_RATE_P, M.ACRO.RLL_RATE_FF, M.ACRO.FLTT_HZ,
                        M.ACRO.FLTE_HZ, M.ACRO.FLTD_HZ, M.ACRO.SMAX),
     pitch_pid = new_pid(M.ACRO.PTCH_RATE_P, M.ACRO.PTCH_RATE_FF, M.ACRO.FLTT_HZ,

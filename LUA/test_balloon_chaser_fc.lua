@@ -3043,6 +3043,138 @@ print("\n18. LIFT VECTOR POINTING, FLOWN CLOSED-LOOP ON A RIGID-BODY AIRFRAME")
   stubs.feed(pack_gain(GAIN_IDX.steering_law, C3.STEERING_LAW)); stubs.advance(DT_MS); update()
 end)()
 
+print("\n19. LIFT VECTOR POINTING HOLDS A NEAR-VERTICAL LINE AGAINST A STEADY SIDE FORCE")
+-- Manual flight (mode 2) toward a target at the manual pitch cap, 85 deg up,
+-- from level flight at the default throttle, on test_plant.lua as section 18
+-- flies it: steering_law 1, every gain at its default, the pitch trim fitted to
+-- the airframe.  In that climb SITL's Talon carries a steady force along its
+-- wing, about 0.6 m/s^2 toward the left wing at a skid of about 1 deg, that
+-- the model's thrust line does not make; the model is given it
+-- (ac.side_force).  With the rudder at zero the only steady lever against a
+-- force along the wing is gravity's part across the path, about
+-- g cos(85 deg), through the bank: the line is held only at the bank where the
+-- two cancel, and the force line the law aims its roll at is what is left of
+-- gravity's part there.
+--   The same climb without the side force is held and lines up.  With it the
+-- line must be held too: the path lines up (the alignment criterion), and once
+-- the turn is complete the roll command never reaches ACRO_ROLL_RATE and the
+-- lift side never changes.
+;(function()
+  local C3 = require("constants")
+  local PL = require("test_plant")
+  local sin, cos, sqrt, rad, deg, acos = math.sin, math.cos, math.sqrt, math.rad, math.deg, math.acos
+  local DT_MS = 20
+  local CLIMB_S = 12
+  local HOLD_S = 0.5                         -- the alignment criterion's hold
+  local TARGET_YAW_DEG, TARGET_PITCH_DEG = 0.0, 85.0
+  local SIDE_FORCE_MPS2 = -0.6               -- along the body y axis, toward the left wing
+  local THROTTLE_PCT = C3.THROTTLE_PCT
+  local hold_ticks = math.floor(HOLD_S * 1000 / DT_MS + 0.5)
+  local ticks = math.floor(CLIMB_S * 1000 / DT_MS + 0.5)
+  local function clip(v, lo, hi) return math.max(lo, math.min(hi, v)) end
+
+  local pv = stubs.param_values
+  local saved_ff, saved_p = pv.PTCH_RATE_FF, pv.PTCH_RATE_P
+  pv.PTCH_RATE_FF, pv.PTCH_RATE_P = PL.ACRO.PTCH_RATE_FF, PL.ACRO.PTCH_RATE_P
+  local t_o, t_l, t_a, t_t = PL.fit_trim_map(C3, -90, 90, 15, { 15.0, 17.0, 19.0, 21.0 })
+  local frames = {}
+  for i, name in pairs(proto.GAIN_NAMES) do
+    local v = C3[string.upper(name)]
+    if type(v) == "number" then frames[#frames + 1] = pack_gain(i, v) end
+  end
+  frames[#frames + 1] = pack_gain(GAIN_IDX.steering_law, 1.0)
+  frames[#frames + 1] = pack_gain(GAIN_IDX.pitch_trim_offset, t_o)
+  frames[#frames + 1] = pack_gain(GAIN_IDX.pitch_trim_lift, t_l)
+  frames[#frames + 1] = pack_gain(GAIN_IDX.pitch_trim_attitude, t_a)
+  frames[#frames + 1] = pack_gain(GAIN_IDX.pitch_trim_thrust, t_t)
+  for k = 1, #frames, 8 do
+    stubs.feed(table.concat(frames, "", k, math.min(k + 7, #frames)))
+    stubs.advance(DT_MS); update()
+  end
+
+  local seq = 0
+  local function next_seq() seq = seq % 60000 + 1; return seq end
+  -- GUIDE in manual mode, tracking: the target is the manual yaw and pitch
+  local function pack_manual(sq, yaw_deg, pitch_deg)
+    local body = string.pack('<I2BBi2i2i2i2i2i2i2i2BBi2i2i2I4I2',
+      sq, 0x02, 2, 0, 0, math.floor(THROTTLE_PCT * 100 + 0.5), 0,
+      math.floor(yaw_deg * 100 + 0.5), math.floor(pitch_deg * 100 + 0.5),
+      0, 0, 1, 0, 0, 0, 0, 0, 12)
+    local hb = string.pack('<I2BB', proto.MAGIC, proto.MSG_GUIDE, #body) .. body
+    return hb .. string.pack('<I2', proto.crc16(hb, 1, #hb))
+  end
+
+  local tn = cos(rad(TARGET_PITCH_DEG)) * cos(rad(TARGET_YAW_DEG))
+  local te = cos(rad(TARGET_PITCH_DEG)) * sin(rad(TARGET_YAW_DEG))
+  local td = -sin(rad(TARGET_PITCH_DEG))
+  local function climb(side_force)
+    local ac = PL.new()
+    local V0 = PL.trim(0.0, THROTTLE_PCT / 100.0)
+    PL.start(ac, V0, THROTTLE_PCT / 100.0, 0.0)
+    ac.side_force = side_force
+    -- from rest: a GUIDE with tracking off ends whatever came before
+    PL.to_stubs(ac, stubs.sim, srv_scaled)
+    stubs.feed(pack_guide(next_seq(), 0x01, 4, 0.0, 0.0, THROTTLE_PCT))
+    stubs.advance(DT_MS); update()
+    local acro_roll = pv.ACRO_ROLL_RATE
+    local r = { t_align = nil, eps_min = math.huge, done = false, n = 0, at_limit = 0,
+                side = nil, side_switches = 0, p2 = 0.0 }
+    local run = 0
+    for k = 1, ticks do
+      PL.to_stubs(ac, stubs.sim, srv_scaled)
+      local xn, xe, xd = PL.path_frame(ac)
+      local theta = deg(acos(clip(xn * tn + xe * te + xd * td, -1.0, 1.0)))
+      r.eps_min = math.min(r.eps_min, theta)
+      if theta < C3.CURVE_TURN_DONE_DEG then r.done = true end
+      run = (theta < C3.ALIGN_TOL_DEG) and run + 1 or 0
+      if run >= hold_ticks and r.t_align == nil then r.t_align = (k - hold_ticks) * DT_MS / 1000 end
+      stubs.feed(pack_manual(next_seq(), TARGET_YAW_DEG, TARGET_PITCH_DEG))
+      stubs.advance(DT_MS); update()
+      local cmd = stubs.log.rate_cmds[#stubs.log.rate_cmds]
+      local thr, p_c, q_c = THROTTLE_PCT, 0.0, 0.0
+      if stubs.sim.nav_owned and cmd then thr, p_c, q_c = cmd[1], cmd[2], cmd[3] end
+      if r.done then
+        r.n = r.n + 1
+        if math.abs(p_c) >= acro_roll then r.at_limit = r.at_limit + 1 end
+        r.p2 = r.p2 + deg(ac.p) ^ 2
+        local sd = last_state2().att_side
+        if sd == sd then
+          if r.side and sd ~= r.side then r.side_switches = r.side_switches + 1 end
+          r.side = sd
+        end
+      end
+      PL.fly(ac, DT_MS, thr, p_c, q_c)
+    end
+    r.rms = sqrt(r.p2 / math.max(r.n, 1))
+    return r
+  end
+  local function txt(r)
+    return string.format("%s; once the turn is complete the roll rate %.1f deg/s rms, the command at "
+                         .. "ACRO_ROLL_RATE on %d of %d ticks, %d lift side changes",
+                         r.t_align and string.format("lined up after %.2f s", r.t_align)
+                         or string.format("never held, %.2f deg at the closest", r.eps_min),
+                         r.rms, r.at_limit, r.n, r.side_switches)
+  end
+
+  local calm = climb(0.0)
+  check(string.format("without a side force the climb toward %g deg up lines up, the roll command "
+                      .. "off its limit and one lift side", TARGET_PITCH_DEG),
+        calm.done and calm.t_align ~= nil and calm.at_limit == 0 and calm.side_switches == 0,
+        txt(calm))
+  local pushed = climb(SIDE_FORCE_MPS2)
+  check(string.format("against a steady side force of %.1f m/s^2 along the wing the climb lines up",
+                      math.abs(SIDE_FORCE_MPS2)),
+        pushed.t_align ~= nil, txt(pushed))
+  check(string.format("against a steady side force of %.1f m/s^2 along the wing, once the turn is "
+                      .. "complete the roll command never reaches ACRO_ROLL_RATE and the lift side "
+                      .. "never changes", math.abs(SIDE_FORCE_MPS2)),
+        pushed.done and pushed.at_limit == 0 and pushed.side_switches == 0, txt(pushed))
+
+  pv.PTCH_RATE_FF, pv.PTCH_RATE_P = saved_ff, saved_p
+  stubs.sim.quat = nil
+  stubs.feed(pack_gain(GAIN_IDX.steering_law, C3.STEERING_LAW)); stubs.advance(DT_MS); update()
+end)()
+
 print("\n" .. string.rep("=", 74))
 if #fails > 0 then
   print(string.format("FC SHELL FAILED: %d of %d - %s", #fails, n,
